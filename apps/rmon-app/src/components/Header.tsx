@@ -39,12 +39,14 @@ const SEGMENTS = [
   { key: "app", label: "Приложения", cls: "seg-app" },
   { key: "wired", label: "Wired", cls: "seg-wired" },
   { key: "compressed", label: "Сжато", cls: "seg-compressed" },
+  { key: "other", label: "Прочее", cls: "seg-other" },
   { key: "cached_files", label: "Кэш", cls: "seg-cached" },
   { key: "free", label: "Свободно", cls: "seg-free" },
 ] as const;
 
 function MemoryBar({ s }: { s: SystemMemory }) {
-  // Normalize by the sum of segments: the kernel's counters never add up to hw.memsize exactly.
+  // Сегменты складываются в total (ядро гарантирует used + cached + free = total и
+  // used = app + wired + compressed + other); нормируем по сумме на случай округлений.
   const sum = SEGMENTS.reduce((a, g) => a + Math.max(0, s[g.key]), 0) || 1;
   return (
     <div className="membar-wrap">

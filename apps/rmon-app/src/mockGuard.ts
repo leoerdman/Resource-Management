@@ -182,7 +182,7 @@ export function createMockGuard(getDash: () => Dashboard): GuardApi & { tick(d: 
       zone_why: zoneWhy,
       red_for_secs: redSince != null ? now - redSince : 0,
       legacy,
-      config: { ...g, log_max_bytes: 5 * MB, allow: ALLOW, never: NEVER },
+      config: { ...g, allow: ALLOW, never: NEVER },
       config_file: settings.config_file,
       recent: recent.slice(),
     };

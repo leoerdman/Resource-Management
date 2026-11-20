@@ -128,7 +128,12 @@ impl Platform for MacOsPlatform {
         let wired = u64::from(vm.wire_count) * page;
         let compressed = u64::from(vm.compressor_page_count) * page;
         let cached_files = (u64::from(vm.external_page_count) + purgeable) * page;
-        let free = u64::from(vm.free_count).saturating_sub(u64::from(vm.speculative_count)) * page;
+        let free = u64::from(vm.free_count) * page;
+        // «Занято» — как в Activity Monitor: всё, кроме свободного и кэша файлов (сверено
+        // синхронными замерами до сотых ГБ). Сумма app + wired + compressed меньше на
+        // спекулятивные и переиспользуемые страницы — они идут в `other`.
+        let used = self.total.saturating_sub(free + cached_files);
+        let other = used.saturating_sub(app + wired + compressed);
 
         let swap = sysctl_struct::<libc::xsw_usage>("vm.swapusage").ok();
         let pressure = sysctl_i32("kern.memorystatus_vm_pressure_level").map(Pressure::from_level).unwrap_or_default();
@@ -136,7 +141,8 @@ impl Platform for MacOsPlatform {
 
         Ok(SystemMemory {
             total: self.total,
-            used: app + wired + compressed,
+            used,
+            other,
             app,
             wired,
             compressed,

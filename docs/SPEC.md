@@ -26,7 +26,15 @@
   «Настройки», значок в строке меню, `rmon guard on|off|dry|arm`;
 - настройки — секция `[guard]` в `config.toml` (по умолчанию — значения старого `config.json`);
   `[guard] never` — и «никогда» для сторожа, и «с подтверждением» для ручного снятия;
-- журнал — `guard.jsonl` в каталоге журналов rmon; история старого сторожа видна во вкладке «Журнал».
+- журнал — `guard.jsonl` в каталоге журналов rmon; история старого сторожа видна во вкладке «Журнал»;
+- упор в предел снятий (`limits`) — с уведомлением: прогоны перезапускаются быстрее, чем их снимают.
+
+## Журналы
+
+Все журналы — JSONL в каталоге журналов (`rmon config` покажет), хранятся по времени: `[logs]
+retention_hours = 24` (страховка по размеру — `max_mb`). `actions.jsonl` — каждое снятие и отказ,
+`guard.jsonl` — решения сторожа, `timeline.jsonl` — раз в `timeline_every_secs` (60 с) состояние
+памяти, топ процессов, подозреваемые и режим сторожа: по ней разбирают «почему не снял» задним числом.
 
 Зона, гистерезис, лимиты, выбор жертвы и «кто автор» — см. doc-комментарий `guard/mod.rs`.
 
@@ -70,7 +78,8 @@ pub enum Pressure { Normal, Warning, Critical }          // kern.memorystatus_vm
 
 pub struct SystemMemory {
     pub total: u64,            // hw.memsize
-    pub used: u64,             // app + wired + compressed (как «Memory Used» в Activity Monitor)
+    pub used: u64,             // total - free - cached_files (как «Memory Used» в Activity Monitor)
+    pub other: u64,            // used - app - wired - compressed: спекулятивные/переиспользуемые страницы
     pub app: u64,              // (internal - purgeable) * page
     pub wired: u64,
     pub compressed: u64,       // compressor_page_count * page

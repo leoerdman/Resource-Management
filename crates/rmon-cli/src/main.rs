@@ -138,7 +138,9 @@ fn main() -> ExitCode {
             };
             eprintln!("{} {e:#}", paint.red("rmon:"));
             if code == 3 {
-                eprintln!("Это процесс приложения владельца. Если снять действительно нужно — повторите с --confirm.");
+                eprintln!(
+                    "Политика требует явного согласия (причина выше). Если снять действительно нужно — повторите с --confirm."
+                );
             }
             ExitCode::from(code)
         }
@@ -210,10 +212,11 @@ fn status(json: bool, paint: Paint) -> Result<()> {
     println!(
         "{}",
         paint.dim(&format!(
-            "Приложения {} · Wired {} · Сжато {} · Кэш {} · Свободно {}",
+            "Приложения {} · Wired {} · Сжато {} · Прочее {} · Кэш {} · Свободно {}",
             bytes(m.app),
             bytes(m.wired),
             bytes(m.compressed),
+            bytes(m.other),
             bytes(m.cached_files),
             bytes(m.free)
         ))
@@ -237,14 +240,6 @@ fn print_suspects(list: &[Suspect], paint: Paint) {
     }
 }
 
-fn matches(r: &ProcessRow, f: &str) -> bool {
-    let f = f.to_lowercase();
-    r.pid.to_string() == f
-        || r.name.to_lowercase().contains(&f)
-        || r.app_group.to_lowercase().contains(&f)
-        || r.args.join(" ").to_lowercase().contains(&f)
-}
-
 fn ps(json: bool, sort: SortBy, limit: usize, group: bool, filter: Option<&str>, paint: Paint) -> Result<()> {
     let (_, t) = sample(Duration::from_millis(500))?;
     let take = if limit == 0 { usize::MAX } else { limit };
@@ -252,7 +247,7 @@ fn ps(json: bool, sort: SortBy, limit: usize, group: bool, filter: Option<&str>,
         let mut snap = t.snapshot;
         if let Some(f) = filter {
             let keep: std::collections::HashSet<i32> =
-                t.dashboard.processes.iter().filter(|r| matches(r, f)).map(|r| r.pid).collect();
+                t.dashboard.processes.iter().filter(|r| r.matches(f)).map(|r| r.pid).collect();
             snap.processes.retain(|p| keep.contains(&p.pid));
         }
         let groups: Vec<_> = app_groups(&snap).into_iter().take(take).collect();
@@ -267,7 +262,7 @@ fn ps(json: bool, sort: SortBy, limit: usize, group: bool, filter: Option<&str>,
     }
     let mut rows: Vec<ProcessRow> = t.dashboard.processes;
     if let Some(f) = filter {
-        rows.retain(|r| matches(r, f));
+        rows.retain(|r| r.matches(f));
     }
     match sort {
         SortBy::Mem => rows.sort_by_key(|r| std::cmp::Reverse(r.reclaim())),
@@ -420,7 +415,8 @@ fn show_config(json: bool) -> Result<()> {
         path.display(),
         if path.exists() { "" } else { " (нет — действуют значения по умолчанию)" }
     );
-    println!("журнал         {}", config::actions_log().display());
+    println!("журнал         {} (хранится {} ч)", config::actions_log().display(), cfg.logs.retention_hours);
+    println!("лента          {}", rmon_core::monitor::timeline_log().display());
     println!("сторож         {}", guard::runner::events_log().display());
     println!("\n{}", toml::to_string_pretty(&cfg)?);
     if errors.is_empty() {
@@ -531,7 +527,8 @@ fn guard_now(json: bool, paint: Paint) -> Result<()> {
 }
 
 fn guard_run(json: bool) -> Result<()> {
-    let cfg = MonitorConfig { tick: Duration::from_secs(3), analyze_every: 20, ..MonitorConfig::default() };
+    let cfg =
+        MonitorConfig { tick: Duration::from_secs(3), analyze_every: 20, timeline: true, ..MonitorConfig::default() };
     let handle = rmon_core::monitor::spawn_guarded(
         cfg,
         |_| {},

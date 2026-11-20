@@ -87,6 +87,18 @@ pub struct ProcessRow {
 }
 
 impl ProcessRow {
+    /// Совпадает ли строка с фильтром человека: pid целиком, либо подстрока (без регистра) в имени,
+    /// приложении, строке запуска или каталоге. То же правило — в фильтре окна (`ProcessesTab.tsx`).
+    pub fn matches(&self, query: &str) -> bool {
+        let q = query.trim().to_lowercase();
+        q.is_empty()
+            || self.pid.to_string() == q
+            || self.name.to_lowercase().contains(&q)
+            || self.app_group.to_lowercase().contains(&q)
+            || self.args.join(" ").to_lowercase().contains(&q)
+            || self.cwd.as_deref().is_some_and(|c| c.to_lowercase().contains(&q))
+    }
+
     /// Сколько освободится: footprint, иначе rss.
     pub fn reclaim(&self) -> u64 {
         self.footprint.unwrap_or(self.rss)
@@ -143,6 +155,9 @@ pub struct MonitorConfig {
     pub thresholds: Thresholds,
     /// Предел суммарной длины аргументов в [`ProcessRow`].
     pub args_limit: usize,
+    /// Писать ленту состояния (`timeline.jsonl`, шаг — `[logs] timeline_every_secs`): включают
+    /// долгоживущие процессы, которые сторожат или показывают окно.
+    pub timeline: bool,
 }
 
 impl Default for MonitorConfig {
@@ -155,6 +170,7 @@ impl Default for MonitorConfig {
             chart_window: Duration::from_secs(15 * 60),
             thresholds: config::global().thresholds.clone(),
             args_limit: 400,
+            timeline: false,
         }
     }
 }
@@ -394,6 +410,46 @@ pub struct ProcessDetails {
     pub series: Vec<(u64, u64)>,
 }
 
+/// Лента состояния: что было с памятью и кто её занимал — для разбора задним числом.
+pub fn timeline_log() -> std::path::PathBuf {
+    config::log_dir().join("timeline.jsonl")
+}
+
+fn write_timeline(d: &Dashboard, snap: &Snapshot, guard: Option<&GuardHandle>) {
+    let mut top: Vec<&ProcessInfo> = snap.processes.iter().collect();
+    top.sort_by_key(|p| std::cmp::Reverse(p.reclaim()));
+    let top: Vec<serde_json::Value> = top
+        .iter()
+        .take(8)
+        .map(|p| serde_json::json!({ "pid": p.pid, "name": p.name, "mem": p.reclaim(), "cmd": short_cmd(p) }))
+        .collect();
+    let suspects: Vec<serde_json::Value> = d
+        .suspects
+        .iter()
+        .take(5)
+        .map(|s| serde_json::json!({ "pid": s.pid, "kind": s.kind, "reclaim": s.reclaim, "reason": s.reason }))
+        .collect();
+    let guard = guard.map(|g| {
+        let st = g.status();
+        serde_json::json!({ "mode": st.mode, "zone": st.zone, "why": st.zone_why, "red_for_secs": st.red_for_secs })
+    });
+    let m = &d.system;
+    let line = serde_json::json!({
+        "ts": d.taken_at,
+        "pressure": m.pressure,
+        "available_pct": m.available_pct,
+        "used": m.used,
+        "swap_used": m.swap_used,
+        "compressed": m.compressed,
+        "top": top,
+        "suspects": suspects,
+        "guard": guard,
+    });
+    if let Err(e) = crate::journal::append_retained(&timeline_log(), &line.to_string()) {
+        eprintln!("rmon: лента состояния: {e}");
+    }
+}
+
 /// Ряды памяти процессов: (pid, started_at) → [(t, bytes)].
 type SeriesMap = HashMap<(i32, u64), Vec<(u64, u64)>>;
 
@@ -565,6 +621,7 @@ fn start(cfg: MonitorConfig, listener: Arc<Listener>, guard: Option<GuardHandle>
     std::thread::Builder::new()
         .name("rmon-monitor".into())
         .spawn(move || {
+            let mut last_timeline = 0u64;
             loop {
                 let started = Instant::now();
                 match monitor.tick() {
@@ -579,6 +636,14 @@ fn start(cfg: MonitorConfig, listener: Arc<Listener>, guard: Option<GuardHandle>
                             }
                             published.dashboard = Some(dashboard.clone());
                             published.snapshot = Some(snapshot.clone());
+                        }
+                        let every = config::global().logs.timeline_every_secs;
+                        if monitor.cfg.timeline
+                            && every > 0
+                            && dashboard.taken_at.saturating_sub(last_timeline) >= every
+                        {
+                            last_timeline = dashboard.taken_at;
+                            write_timeline(&dashboard, &snapshot, worker.guard.as_ref());
                         }
                         if let Some(g) = &worker.guard {
                             g.feed(snapshot);

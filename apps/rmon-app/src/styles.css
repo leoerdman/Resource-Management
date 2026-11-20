@@ -16,6 +16,7 @@
   --c-app: #0a84ff;
   --c-wired: #e8730c;
   --c-compressed: #8e5cd9;
+  --c-other: #b8a98f;
   --c-cached: #8fb3d9;
   --c-free: #d9d9de;
   --c-used: #0a84ff;
@@ -50,6 +51,7 @@
     --c-app: #0a84ff;
     --c-wired: #ff9f0a;
     --c-compressed: #bf5af2;
+    --c-other: #7d705c;
     --c-cached: #5e7d9e;
     --c-free: #48484a;
     --c-used: #4aa3ff;
@@ -250,6 +252,9 @@ button {
 }
 .seg-compressed {
   background: var(--c-compressed);
+}
+.seg-other {
+  background: var(--c-other);
 }
 .seg-cached {
   background: var(--c-cached);
@@ -1638,3 +1643,8 @@ code {
   border-radius: 6px;
   background: var(--red-soft);
 }
+
+/* Аварийный экран: ошибка текстом вместо пустого окна. */
+.crash { padding: 24px; max-width: 900px; }
+.crash h2 { margin: 0 0 12px; color: #ff453a; }
+.crash pre { white-space: pre-wrap; font: 12px ui-monospace, Menlo, monospace; background: rgba(127,127,127,.12); padding: 12px; border-radius: 8px; max-height: 60vh; overflow: auto; }

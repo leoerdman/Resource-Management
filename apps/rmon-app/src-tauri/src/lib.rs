@@ -465,7 +465,7 @@ pub fn run() {
             let notify = handle.clone();
             let guard_app = handle.clone();
             let monitor = monitor::spawn_guarded(
-                MonitorConfig::default(),
+                MonitorConfig { timeline: true, ..MonitorConfig::default() },
                 move |d| deliver(&notify, d),
                 move |ev| on_guard_event(&guard_app, ev),
             )?;

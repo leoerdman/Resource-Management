@@ -219,17 +219,11 @@ pub fn events_log() -> PathBuf {
     config::log_dir().join("guard.jsonl")
 }
 
-fn append_event(ev: &GuardEvent, max_bytes: u64) {
-    let path = events_log();
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    if std::fs::metadata(&path).is_ok_and(|m| m.len() > max_bytes) {
-        let _ = std::fs::rename(&path, path.with_extension("old.jsonl"));
-    }
-    if let (Ok(mut f), Ok(line)) = (OpenOptions::new().create(true).append(true).open(&path), serde_json::to_string(ev))
+fn append_event(ev: &GuardEvent) {
+    if let Ok(line) = serde_json::to_string(ev)
+        && let Err(e) = crate::journal::append_retained(&events_log(), &line)
     {
-        let _ = writeln!(f, "{line}");
+        eprintln!("rmon: журнал сторожа: {e}");
     }
 }
 
@@ -427,7 +421,7 @@ impl Runner {
 
     fn emit(&mut self, kind: EventKind, pressure: Option<PressureFields>, notice: Option<Notice>) {
         let ev = GuardEvent { ts: now_secs(), kind, pressure, notice };
-        append_event(&ev, self.cfg.guard.log_max_bytes);
+        append_event(&ev);
         self.recent.push_front(ev.clone());
         self.recent.truncate(RECENT);
         (self.listener)(&ev);
@@ -473,7 +467,17 @@ impl Runner {
         if acting {
             match obs.decision {
                 Decision::Wait => {}
-                Decision::Limited { why } => self.emit(EventKind::Limit { why }, Some(pressure.clone()), None),
+                Decision::Limited { why } => {
+                    // Упор в предел — не тишина: прогоны перезапускаются быстрее, чем их снимают.
+                    let notice = cfg.notify.then(|| Notice {
+                        title: "Сторож памяти".into(),
+                        subtitle: "Упёрся в предел снятий".into(),
+                        body: format!(
+                            "{why}. Прогоны перезапускаются быстрее, чем их снимают — кто их запускает, видно во вкладке «Сторож»; предел — в «Настройках»."
+                        ),
+                    });
+                    self.emit(EventKind::Limit { why }, Some(pressure.clone()), notice)
+                }
                 Decision::NoVictim { why, rejected } => {
                     self.emit(EventKind::NoVictim { why, rejected }, Some(pressure.clone()), None)
                 }

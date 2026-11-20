@@ -23,11 +23,85 @@ pub fn guard_path() -> PathBuf {
 /// Дописать строку в журнал действий.
 pub fn append_action(entry: &serde_json::Value) -> Result<()> {
     let path = actions_path();
+    append_retained(&path, &entry.to_string()).map_err(|e| Error::journal(&path, e))
+}
+
+/// Как часто проверять, не пора ли выбросить старые записи (проверка — чтение первой строки).
+const PRUNE_CHECK_EVERY: u64 = 10 * 60;
+
+/// Дописать строку JSONL в журнал с хранением по времени ([`config::LogsConfig`]).
+///
+/// Каждая строка — объект с полем `ts` (unix-секунды). Записи старше `retention_hours`
+/// выбрасываются при дозаписи (не чаще раза в 10 минут на журнал — по первой строке видно,
+/// есть ли что выбрасывать); если файл перерос `max_mb`, выбрасываются самые старые записи
+/// до половины предела. Перезапись атомарная (временный файл + rename).
+pub fn append_retained(path: &Path, line: &str) -> std::io::Result<()> {
+    use std::collections::HashMap;
+    use std::sync::{LazyLock, Mutex};
+    static CHECKED: LazyLock<Mutex<HashMap<PathBuf, u64>>> = LazyLock::new(Default::default);
+
     if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir).map_err(|e| Error::journal(dir, e))?;
+        fs::create_dir_all(dir)?;
     }
-    let mut f = OpenOptions::new().create(true).append(true).open(&path).map_err(|e| Error::journal(&path, e))?;
-    writeln!(f, "{entry}").map_err(|e| Error::journal(&path, e))
+    let now = crate::collect::unix_now();
+    let due = {
+        let mut checked = CHECKED.lock().unwrap_or_else(|e| e.into_inner());
+        let last = checked.get(path).copied().unwrap_or(0);
+        let due = now.saturating_sub(last) >= PRUNE_CHECK_EVERY;
+        if due {
+            checked.insert(path.to_path_buf(), now);
+        }
+        due
+    };
+    if due {
+        let logs = config::global().logs.clone();
+        prune(path, now.saturating_sub(logs.retention_hours.max(1) * 3600), logs.max_mb.max(1) * 1024 * 1024)?;
+    }
+    let mut f = OpenOptions::new().create(true).append(true).open(path)?;
+    writeln!(f, "{line}")
+}
+
+fn line_ts(line: &str) -> Option<u64> {
+    #[derive(Deserialize)]
+    struct Ts {
+        ts: Option<u64>,
+        t: Option<String>,
+    }
+    let v: Ts = serde_json::from_str(line).ok()?;
+    v.ts.or_else(|| v.t.as_deref().and_then(parse_iso))
+}
+
+/// Выбросить записи старше `cutoff` и, если файл больше `max_bytes`, самые старые сверх половины предела.
+pub fn prune(path: &Path, cutoff: u64, max_bytes: u64) -> std::io::Result<()> {
+    use std::io::BufRead;
+    let Ok(meta) = fs::metadata(path) else { return Ok(()) };
+    let first_old = {
+        let f = fs::File::open(path)?;
+        let mut first = String::new();
+        std::io::BufReader::new(f).read_line(&mut first)?;
+        line_ts(first.trim()).is_some_and(|ts| ts < cutoff)
+    };
+    if !first_old && meta.len() <= max_bytes {
+        return Ok(());
+    }
+    let text = fs::read_to_string(path)?;
+    let mut keep: Vec<&str> =
+        text.lines().filter(|l| !l.trim().is_empty() && line_ts(l).is_none_or(|ts| ts >= cutoff)).collect();
+    let mut size: u64 = keep.iter().map(|l| l.len() as u64 + 1).sum();
+    let mut drop = 0;
+    while size > max_bytes / 2 && drop < keep.len() {
+        size -= keep[drop].len() as u64 + 1;
+        drop += 1;
+    }
+    keep.drain(..drop);
+    let tmp = path.with_extension("jsonl.tmp");
+    let mut out = String::with_capacity(size as usize);
+    for l in keep {
+        out.push_str(l);
+        out.push('\n');
+    }
+    fs::write(&tmp, out)?;
+    fs::rename(&tmp, path)
 }
 
 /// Откуда запись.
@@ -260,6 +334,23 @@ mod tests {
         assert_eq!(guard_entries(&path, 0).len(), 0);
         assert_eq!(guard_entries(&path, 10_000).len(), 3001);
         assert!(guard_entries(&path.with_file_name("нет.jsonl"), 5).is_empty(), "нет файла — пусто");
+    }
+
+    #[test]
+    fn prune_keeps_last_day_and_caps_size() {
+        let dir = std::env::temp_dir().join(format!("rmon-prune-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("x.jsonl");
+        let now = 1_000_000u64;
+        let lines: Vec<String> = (0..48).map(|h| format!("{{\"ts\":{},\"n\":{h}}}", now - (47 - h) * 3600)).collect();
+        std::fs::write(&file, lines.join("\n") + "\n").unwrap();
+        super::prune(&file, now - 24 * 3600, 1 << 20).unwrap();
+        let kept = std::fs::read_to_string(&file).unwrap();
+        assert_eq!(kept.lines().count(), 25, "последние сутки включительно");
+        assert!(kept.lines().next().unwrap().contains(&format!("{}", now - 24 * 3600)));
+        super::prune(&file, 0, 200).unwrap();
+        assert!(std::fs::metadata(&file).unwrap().len() <= 100, "предел размера — до половины");
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]

@@ -49,10 +49,6 @@ min_victim_mb: number,
  */
 limits: Array<GuardLimit>, 
 /**
- * Ротация журнала сторожа.
- */
-log_max_bytes: number, 
-/**
  * «Можно».
  */
 allow: Array<AllowRule>, 

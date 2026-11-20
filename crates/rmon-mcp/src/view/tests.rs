@@ -56,6 +56,7 @@ fn dashboard() -> Dashboard {
         system: SystemMemory {
             total: 24 * GIB,
             used: 18 * GIB,
+            other: 0,
             app: 9 * GIB,
             wired: 2 * GIB,
             compressed: 7 * GIB,

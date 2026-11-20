@@ -25,6 +25,8 @@ impl Server {
             // Отказы снятия пишутся в журнал действий — не в журнал владельца.
             .env("RMON_ACTIONS_LOG", scratch.join("actions.jsonl"))
             .env("RMON_GUARD_LOG", scratch.join("events.jsonl"))
+            .env("RMON_LOG_DIR", scratch)
+            .env("RMON_CONFIG", scratch.join("config.toml"))
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())

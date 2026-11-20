@@ -257,14 +257,15 @@ function systemAt(t: number): Omit<SystemMemory, "counters"> {
   const app = 11.2 * GB + wave * 1.6 * GB + between(-60, 60) * MB;
   const wired = 3.1 * GB + between(-20, 20) * MB;
   const compressed = 6.8 * GB + Math.sin(t / 230) * 1.4 * GB;
-  const used = app + wired + compressed;
+  const other = 0.6 * GB + between(-40, 40) * MB;
+  const used = app + wired + compressed + other;
   const free = Math.max(120 * MB, 0.45 * GB - wave * 0.3 * GB);
   const cached_files = Math.max(0, TOTAL - used - free);
   const swap_used = 9.2 * GB + Math.sin(t / 300) * 1.8 * GB + Math.max(0, wave) * 0.8 * GB;
   const level = (used / TOTAL) * 0.6 + wave * 0.4;
   const pressure: Pressure = level > 0.72 ? "critical" : level > 0.52 ? "warning" : "normal";
   const available_pct = Math.round(Math.max(3, Math.min(60, 40 - wave * 35)));
-  return { total: TOTAL, used, app, wired, compressed, cached_files, free, swap_total: SWAP_TOTAL, swap_used, pressure, available_pct };
+  return { total: TOTAL, used, other, app, wired, compressed, cached_files, free, swap_total: SWAP_TOTAL, swap_used, pressure, available_pct };
 }
 
 for (let t = now0 - HISTORY_S; t < now0; t += TICK_S) {

@@ -84,6 +84,27 @@ pub struct Config {
     pub guard: crate::guard::GuardConfig,
     /// Приложение: автозапуск, значок.
     pub app: crate::settings::AppConfig,
+    /// Журналы: сколько хранить.
+    pub logs: LogsConfig,
+}
+
+/// Журналы (секция `[logs]`): все журналы rmon хранятся по времени, а не по размеру —
+/// чтобы разбор «почему сторож не снял» был возможен и через сутки.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LogsConfig {
+    /// Сколько часов хранить записи (не меньше 1).
+    pub retention_hours: u64,
+    /// Страховочный предел размера одного журнала, МБ: при превышении отбрасываются самые старые записи.
+    pub max_mb: u64,
+    /// Писать ленту состояния (`timeline.jsonl`) раз в столько секунд; 0 — не писать.
+    pub timeline_every_secs: u64,
+}
+
+impl Default for LogsConfig {
+    fn default() -> Self {
+        Self { retention_hours: 24, max_mb: 64, timeline_every_secs: 60 }
+    }
 }
 
 impl Config {
@@ -163,8 +184,12 @@ pub fn config_file() -> PathBuf {
     env_path("RMON_CONFIG").unwrap_or_else(|| config_dir().join("config.toml"))
 }
 
-/// Каталог журналов: `~/Library/Logs/rmon`, `$XDG_STATE_HOME/rmon`, `%LOCALAPPDATA%\rmon\logs`.
+/// Каталог журналов: env `RMON_LOG_DIR`, иначе `~/Library/Logs/rmon`, `$XDG_STATE_HOME/rmon`,
+/// `%LOCALAPPDATA%\rmon\logs`.
 pub fn log_dir() -> PathBuf {
+    if let Some(dir) = env_path("RMON_LOG_DIR") {
+        return dir;
+    }
     if cfg!(target_os = "macos") {
         home_dir().join("Library/Logs/rmon")
     } else if cfg!(windows) {

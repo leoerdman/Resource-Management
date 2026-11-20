@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- Resource Monitor: шкала давления памяти (зелёное → жёлтое → красное) над модулем ОЗУ.
+       Сетка иконок macOS: тело 824×824 со скруглением 185 в холсте 1024. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#232B40"/>
+      <stop offset="1" stop-color="#141927"/>
+    </linearGradient>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)"/>
+  <rect x="100.5" y="100.5" width="823" height="823" rx="184.5" fill="none" stroke="#FFFFFF" stroke-opacity="0.08"/>
+  <path d="M262 640 A250 250 0 0 1 362 440" fill="none" stroke="#34C759" stroke-width="64" stroke-linecap="round"/>
+  <path d="M392 418 A250 250 0 0 1 632 418" fill="none" stroke="#FFCC00" stroke-width="64" stroke-linecap="round"/>
+  <path d="M662 440 A250 250 0 0 1 762 640" fill="none" stroke="#FF3B30" stroke-width="64" stroke-linecap="round"/>
+  <line x1="512" y1="640" x2="420" y2="470" stroke="#F2F4F8" stroke-width="30" stroke-linecap="round"/>
+  <circle cx="512" cy="640" r="46" fill="#F2F4F8"/>
+  <rect x="352" y="732" width="320" height="64" rx="18" fill="#2C3650"/>
+  <g fill="#5B6B8C">
+    <rect x="384" y="752" width="36" height="24" rx="4"/>
+    <rect x="440" y="752" width="36" height="24" rx="4"/>
+    <rect x="496" y="752" width="36" height="24" rx="4"/>
+    <rect x="552" y="752" width="36" height="24" rx="4"/>
+    <rect x="608" y="752" width="36" height="24" rx="4"/>
+  </g>
+</svg>

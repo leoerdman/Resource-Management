@@ -93,7 +93,8 @@ export const ProcessesTab = memo(function ProcessesTab({ processes, now, onKill,
         String(r.pid) === q ||
         r.name.toLowerCase().includes(q) ||
         r.app_group.toLowerCase().includes(q) ||
-        r.args.some((a) => a.toLowerCase().includes(q)) ||
+        // Правило — `ProcessRow::matches` в rmon-core (его же использует `rmon ps --filter`).
+        r.args.join(" ").toLowerCase().includes(q) ||
         (r.cwd != null && r.cwd.toLowerCase().includes(q)),
     );
   }, [processes, q]);

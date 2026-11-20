@@ -107,16 +107,22 @@ pub struct VmCounters {
     pub decompressions: u64,
 }
 
-/// Память системы целиком. `used = app + wired + compressed`, как «Memory Used» в Activity Monitor.
+/// Память системы целиком: `total = used + cached_files + free`, `used = app + wired + compressed + other`
+/// — те же определения, что у Activity Monitor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct SystemMemory {
     /// `hw.memsize`.
     #[ts(type = "number")]
     pub total: u64,
-    /// Занято: `app + wired + compressed`.
+    /// Занято — как «Memory Used» в Activity Monitor: `total - free - cached_files`.
+    /// Складывается из `app + wired + compressed + other`.
     #[ts(type = "number")]
     pub used: u64,
+    /// Занято, но ни приложениям, ни ядру, ни сжатию: спекулятивные и переиспользуемые
+    /// страницы и прочая механика VM. Без него полоса-разбивка не сходилась бы с «Занято».
+    #[ts(type = "number")]
+    pub other: u64,
     /// Память приложений: `(internal - purgeable) * page`.
     #[ts(type = "number")]
     pub app: u64,

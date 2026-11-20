@@ -3,7 +3,8 @@ import type { Pressure } from "./Pressure";
 import type { VmCounters } from "./VmCounters";
 
 /**
- * Память системы целиком. `used = app + wired + compressed`, как «Memory Used» в Activity Monitor.
+ * Память системы целиком: `total = used + cached_files + free`, `used = app + wired + compressed + other`
+ * — те же определения, что у Activity Monitor.
  */
 export type SystemMemory = { 
 /**
@@ -11,9 +12,15 @@ export type SystemMemory = {
  */
 total: number, 
 /**
- * Занято: `app + wired + compressed`.
+ * Занято — как «Memory Used» в Activity Monitor: `total - free - cached_files`.
+ * Складывается из `app + wired + compressed + other`.
  */
 used: number, 
+/**
+ * Занято, но ни приложениям, ни ядру, ни сжатию: спекулятивные и переиспользуемые
+ * страницы и прочая механика VM. Без него полоса-разбивка не сходилась бы с «Занято».
+ */
+other: number, 
 /**
  * Память приложений: `(internal - purgeable) * page`.
  */

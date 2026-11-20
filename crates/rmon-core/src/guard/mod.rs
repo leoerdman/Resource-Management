@@ -119,9 +119,6 @@ pub struct GuardConfig {
     pub min_victim_mb: u64,
     /// Защита от каскада.
     pub limits: Vec<Limit>,
-    /// Ротация журнала сторожа.
-    #[ts(type = "number")]
-    pub log_max_bytes: u64,
     /// «Можно».
     pub allow: Vec<AllowRule>,
     /// «Никогда» — совпало хоть одно поле. Тот же список политика rmon считает
@@ -231,7 +228,6 @@ impl Default for GuardConfig {
             red: RedConfig::default(),
             min_victim_mb: 1024,
             limits: vec![Limit { window_secs: 60, max: 2 }, Limit { window_secs: 600, max: 6 }],
-            log_max_bytes: 2 * MIB,
             allow: default_allow(),
             never: default_never(),
         }
