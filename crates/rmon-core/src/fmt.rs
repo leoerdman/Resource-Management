@@ -25,14 +25,26 @@ pub fn bytes(n: u64) -> String {
     format!("{body} {}", UNITS[unit])
 }
 
-/// Скорость роста: «40,0 МБ/мин».
+/// Скорость роста: «40 МБ/мин», убыль — со знаком: «-1,5 МБ/мин».
 pub fn bytes_per_min(per_min: f64) -> String {
     let unit = if per_min.abs() >= MIB as f64 {
         (MIB as f64, "МБ/мин")
     } else {
         (KIB as f64, "КБ/мин")
     };
-    format!("{} {}", decimal1(per_min / unit.0), unit.1)
+    let value = decimal1(per_min.abs() / unit.0);
+    let sign = if per_min < 0.0 && value != "0" { "-" } else { "" };
+    format!("{sign}{value} {}", unit.1)
+}
+
+/// Изменение размера со знаком: «+1,2 ГБ», «-300 МБ», «0 Б».
+pub fn bytes_delta(delta: i64) -> String {
+    let sign = match delta.signum() {
+        1 => "+",
+        -1 => "-",
+        _ => "",
+    };
+    format!("{sign}{}", bytes(delta.unsigned_abs()))
 }
 
 /// Длительность коротко: «6 мин», «2 ч 10 мин», «12 с».
@@ -98,6 +110,16 @@ mod tests {
         assert_eq!(duration_human(6 * 60), "6 мин");
         assert_eq!(duration_human(2 * 3600 + 10 * 60), "2 ч 10 мин");
         assert_eq!(duration_human(12), "12 с");
+    }
+
+    #[test]
+    fn keeps_sign_of_shrink_and_delta() {
+        assert_eq!(bytes_per_min(-1.5 * MIB as f64), "-1,5 МБ/мин");
+        assert_eq!(bytes_per_min(-0.01), "0 КБ/мин");
+        assert_eq!(bytes_delta(1288 * MIB as i64), format!("+{}", bytes(1288 * MIB)));
+        assert_eq!(bytes_delta(-300 * MIB as i64), format!("-{}", bytes(300 * MIB)));
+        assert_eq!(bytes_delta(0), bytes(0));
+        assert_eq!(bytes_delta(i64::MIN), format!("-{}", bytes(i64::MIN.unsigned_abs())));
     }
 
     #[test]

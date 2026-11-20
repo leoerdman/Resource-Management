@@ -1,0 +1,20 @@
+[package]
+name = "rmon-mcp"
+description = "MCP-сервер rmon (stdio) поверх rmon-core: память, процессы, предложения, снятие через защитный слой"
+version.workspace = true
+edition.workspace = true
+rust-version = "1.88"
+publish.workspace = true
+
+[[bin]]
+name = "rmon-mcp"
+path = "src/bin/rmon-mcp.rs"
+
+[dependencies]
+rmon-core = { path = "../rmon-core" }
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+rmcp = { version = "3.11", default-features = false, features = ["server", "macros", "transport-io"] }
+tokio = { version = "1", default-features = false, features = ["rt", "io-std", "macros", "time"] }
+schemars = "1"
