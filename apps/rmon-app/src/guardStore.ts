@@ -71,10 +71,6 @@ export function useGuard(): GuardState {
 
 export const guardStore = {
   refresh,
-  /** Статус пришёл из другой команды (перенос старого сторожа) — показать сразу. */
-  setStatus(status: GuardStatus) {
-    set({ status });
-  },
   /**
    * Поменять настройки сторожа: запись в config.toml через `save_settings` поверх свежего
    * файла (бэкенд проверяет и применяет до ответа). Отказ — исключение со строкой по-русски.

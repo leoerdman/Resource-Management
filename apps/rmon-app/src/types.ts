@@ -26,7 +26,6 @@ export type { GuardZone } from "./bindings/GuardZone";
 export type { GuardPressure } from "./bindings/GuardPressure";
 export type { GuardRejected } from "./bindings/GuardRejected";
 export type { GuardCandidate } from "./bindings/GuardCandidate";
-export type { LegacyGuard } from "./bindings/LegacyGuard";
 export type { AllowRule } from "./bindings/AllowRule";
 export type { RuleSpec } from "./bindings/RuleSpec";
 export type { Notice } from "./bindings/Notice";

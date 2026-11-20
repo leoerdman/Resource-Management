@@ -782,10 +782,6 @@ button {
   background: var(--accent-soft);
   color: var(--accent);
 }
-.src-memory-guard {
-  background: var(--orange-soft);
-  color: var(--orange);
-}
 .jtext {
   -webkit-user-select: text;
   user-select: text;
@@ -1468,25 +1464,6 @@ code {
 }
 .orphan-card .mode-word {
   font-size: 22px;
-}
-.banner {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 10px 14px;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--panel);
-}
-.banner > div {
-  flex: 1;
-}
-.banner-warn {
-  background: var(--orange-soft);
-  border-color: var(--orange-soft2);
-}
-.legacy-quiet {
-  margin-top: -6px;
 }
 .sec-title {
   margin: 0 0 6px;

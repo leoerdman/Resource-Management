@@ -11,13 +11,12 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use super::author::{self, Author, Origin};
-use super::legacy::{self, Legacy};
 use super::orphans::{IdleOrphan, OrphanStatus, OrphanWatch};
 use super::{
     Candidate, Decision, Guard, GuardConfig, GuardMode, Rejected, Rules, Zone, pressure_level, self_and_ancestors,
@@ -29,8 +28,6 @@ use crate::kill::{KillRequest, Requester, kill_with};
 use crate::model::Snapshot;
 use crate::platform::{self, Platform};
 
-/// Как часто проверять, жив ли старый сторож (это запуск `launchctl`).
-const LEGACY_CHECK: Duration = Duration::from_secs(30);
 /// Сколько последних событий держать в памяти для окна.
 const RECENT: usize = 50;
 /// Сирот за один опрос, не больше: снятие ждёт выхода процесса, а красная зона ждать не должна.
@@ -244,8 +241,6 @@ pub struct GuardStatus {
     /// Сколько уже красное.
     #[ts(type = "number")]
     pub red_for_secs: u64,
-    /// Старый сторож.
-    pub legacy: Legacy,
     /// Сироты под наблюдением автоочистки.
     pub orphans: OrphanStatus,
     /// Действующие настройки.
@@ -354,18 +349,6 @@ impl GuardHandle {
         }
         self.status()
     }
-
-    /// Перенести обязанность старого сторожа в rmon.
-    pub fn retire_legacy(&self) -> Result<GuardStatus, String> {
-        legacy::retire()?;
-        Ok(self.reload())
-    }
-
-    /// Вернуть старого сторожа.
-    pub fn restore_legacy(&self) -> Result<GuardStatus, String> {
-        legacy::restore()?;
-        Ok(self.reload())
-    }
 }
 
 /// Итог снятия словом журнала: `term`, `kill`, `alive`, `gone`, `reused`, `denied`, `refused`.
@@ -420,8 +403,6 @@ struct Runner {
     guard: Guard,
     orphans: OrphanWatch,
     lock: Option<File>,
-    legacy: Legacy,
-    legacy_checked: Option<Instant>,
     mode: GuardMode,
     platform: Box<dyn Platform>,
     listener: Listener,
@@ -464,15 +445,6 @@ impl Runner {
             self.lock = None;
             return GuardMode::Off;
         }
-        if self.legacy_checked.is_none_or(|t| t.elapsed() >= LEGACY_CHECK) {
-            self.legacy = legacy::status();
-            self.legacy_checked = Some(Instant::now());
-        }
-        if let Legacy::Running { pid } = &self.legacy {
-            self.lock = None;
-            let pid = pid.map(|p| format!(", pid {p}")).unwrap_or_default();
-            return GuardMode::Standby(format!("работает старый сторож memory-guard{pid} — перенесите его в rmon"));
-        }
         if self.lock.is_none() {
             self.lock = guard_lock();
             if self.lock.is_none() {
@@ -498,7 +470,6 @@ impl Runner {
             zone: self.guard.zone(),
             zone_why,
             red_for_secs,
-            legacy: self.legacy.clone(),
             orphans: self.orphans.status(),
             config: self.cfg.guard.clone(),
             config_file: config::config_file().display().to_string(),
@@ -691,7 +662,6 @@ impl Runner {
                 Msg::Snapshot(snap) => self.step(&snap),
                 Msg::Reload(ack) => {
                     self.reload(true);
-                    self.legacy_checked = None;
                     let mode = self.decide_mode();
                     if mode != self.mode {
                         self.mode = mode.clone();
@@ -723,7 +693,6 @@ pub fn spawn(on_event: impl Fn(&GuardEvent) + Send + Sync + 'static) -> crate::R
             zone: None,
             zone_why: String::new(),
             red_for_secs: 0,
-            legacy: Legacy::Absent,
             orphans: OrphanStatus::default(),
             config: cfg.guard.clone(),
             config_file: config::config_file().display().to_string(),
@@ -739,8 +708,6 @@ pub fn spawn(on_event: impl Fn(&GuardEvent) + Send + Sync + 'static) -> crate::R
         guard: Guard::default(),
         orphans: OrphanWatch::default(),
         lock: None,
-        legacy: Legacy::Absent,
-        legacy_checked: None,
         mode: GuardMode::Off,
         platform: platform::current()?,
         listener: Arc::new(on_event),

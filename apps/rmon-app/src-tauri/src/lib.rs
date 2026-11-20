@@ -341,7 +341,7 @@ async fn kill_processes(
     .map_err(|e| e.to_string())
 }
 
-/// Журналы rmon, сторожа и старого memory-guard, новые сверху.
+/// Журналы rmon и сторожа, новые сверху.
 #[tauri::command]
 async fn read_journal() -> Vec<JournalEntry> {
     tauri::async_runtime::spawn_blocking(|| journal::read_recent(300)).await.unwrap_or_default()
@@ -351,24 +351,6 @@ async fn read_journal() -> Vec<JournalEntry> {
 #[tauri::command]
 fn guard_status(state: tauri::State<'_, AppState>) -> Result<GuardStatus, String> {
     state.monitor()?.guard().map(|g| g.status()).ok_or_else(|| "сторож не запущен".into())
-}
-
-/// Перенести обязанность старого LaunchAgent memory-guard в rmon (обратимо).
-#[tauri::command]
-async fn guard_retire_legacy(app: AppHandle, state: tauri::State<'_, AppState>) -> Result<GuardStatus, String> {
-    let g = state.monitor()?.guard().cloned().ok_or("сторож не запущен")?;
-    let s = tauri::async_runtime::spawn_blocking(move || g.retire_legacy()).await.map_err(|e| e.to_string())??;
-    update_tray(&app, &app.state::<AppState>(), None);
-    Ok(s)
-}
-
-/// Вернуть старый memory-guard.
-#[tauri::command]
-async fn guard_restore_legacy(app: AppHandle, state: tauri::State<'_, AppState>) -> Result<GuardStatus, String> {
-    let g = state.monitor()?.guard().cloned().ok_or("сторож не запущен")?;
-    let s = tauri::async_runtime::spawn_blocking(move || g.restore_legacy()).await.map_err(|e| e.to_string())??;
-    update_tray(&app, &app.state::<AppState>(), None);
-    Ok(s)
 }
 
 /// Настройки из `config.toml`; `autostart` — как в системе сейчас.
@@ -435,8 +417,6 @@ pub fn run() {
             kill_processes,
             read_journal,
             guard_status,
-            guard_retire_legacy,
-            guard_restore_legacy,
             get_settings,
             save_settings,
             open_config,

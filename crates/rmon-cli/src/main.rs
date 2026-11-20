@@ -104,7 +104,7 @@ enum Cmd {
 
 #[derive(Subcommand)]
 enum GuardCmd {
-    /// Режим, старый сторож, кто держит сторожа, последние события (по умолчанию).
+    /// Режим, автоочистка сирот, кто держит сторожа, последние события (по умолчанию).
     Status,
     /// Проба: зона сейчас и кого бы снял — ничего не трогает.
     Now,
@@ -118,10 +118,6 @@ enum GuardCmd {
     Arm,
     /// Сторожить без окна (для LaunchAgent/терминала); события — в stdout.
     Run,
-    /// Перенести обязанность старого LaunchAgent memory-guard в rmon (обратимо).
-    Retire,
-    /// Вернуть старый memory-guard.
-    Restore,
 }
 
 fn main() -> ExitCode {
@@ -396,7 +392,6 @@ fn show_config(json: bool) -> Result<()> {
             exists: bool,
             actions_log: String,
             guard_events: String,
-            legacy_guard_log: String,
             config: &'a Config,
             rule_errors: &'a [String],
         }
@@ -405,7 +400,6 @@ fn show_config(json: bool) -> Result<()> {
             exists: path.exists(),
             actions_log: config::actions_log().display().to_string(),
             guard_events: guard::runner::events_log().display().to_string(),
-            legacy_guard_log: config::legacy_guard_log().display().to_string(),
             config: &cfg,
             rule_errors: &errors,
         });
@@ -436,27 +430,16 @@ fn guard_cmd(json: bool, action: GuardCmd, paint: Paint) -> Result<()> {
         GuardCmd::On | GuardCmd::Arm => persist_flags(Some(true), Some(false), None).map_err(anyhow::Error::msg)?,
         GuardCmd::Off => persist_flags(Some(false), None, None).map_err(anyhow::Error::msg)?,
         GuardCmd::Dry => persist_flags(Some(true), Some(true), None).map_err(anyhow::Error::msg)?,
-        GuardCmd::Retire => {
-            let s = guard::legacy::retire().map_err(anyhow::Error::msg)?;
-            println!("старый memory-guard: {s:?}; обязанность сторожа — у rmon");
-            return Ok(());
-        }
-        GuardCmd::Restore => {
-            let s = guard::legacy::restore().map_err(anyhow::Error::msg)?;
-            println!("старый memory-guard: {s:?}");
-            return Ok(());
-        }
         GuardCmd::Now => return guard_now(json, paint),
         GuardCmd::Run => return guard_run(json),
         GuardCmd::Status => {}
     }
     let cfg = Config::load()?;
-    let legacy = guard::legacy::status();
     let holder = guard::runner::lock_holder();
     let events = read_events(10);
     if json {
         return print_json(&serde_json::json!({
-            "config": cfg.guard, "legacy": legacy, "lock_holder": holder, "recent": events,
+            "config": cfg.guard, "lock_holder": holder, "recent": events,
         }));
     }
     let g = &cfg.guard;
@@ -482,7 +465,12 @@ fn guard_cmd(json: bool, action: GuardCmd, paint: Paint) -> Result<()> {
         g.after_kill_secs,
         if g.notify { "да" } else { "нет" }
     );
-    println!("  старый memory-guard: {legacy:?}");
+    let o = &g.orphans;
+    if o.enabled {
+        println!("  сироты: снимает после {} мин простоя", o.idle_mins);
+    } else {
+        println!("  сироты: автоочистка выключена");
+    }
     if let Some(pid) = holder {
         println!("  держит сторожа: pid {pid}");
     }

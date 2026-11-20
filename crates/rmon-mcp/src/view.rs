@@ -204,7 +204,7 @@ pub struct AppOut {
     pub count: usize,
 }
 
-/// Зона memory-guard.
+/// Зона сторожа памяти.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct GuardZoneOut {
     /// green | yellow | red.
@@ -232,7 +232,7 @@ pub struct OverviewOut {
     pub suspects: Vec<SuspectOut>,
     /// False during the first seconds after start: suspects need two samples.
     pub analysis_ready: bool,
-    /// Current memory-guard zone (last zone event of its journal), null if no guard journal.
+    /// Current memory guard zone (last zone event of its journal), null if no guard journal.
     pub guard: Option<GuardZoneOut>,
 }
 
@@ -941,7 +941,7 @@ pub fn details_missing(pid: i32, alive: bool) -> String {
 
 // ---------------------------------------------------------------- guard_events
 
-/// Событие memory-guard.
+/// Событие сторожа памяти.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct EventOut {
     /// Unix seconds.
@@ -955,7 +955,7 @@ pub struct EventOut {
 /// Ответ `guard_events`.
 #[derive(Debug, Clone, Serialize, JsonSchema)]
 pub struct GuardOut {
-    /// Journal path (env RMON_GUARD_LOG overrides).
+    /// Journal path (`guard.jsonl` in the rmon log directory, env `RMON_LOG_DIR`).
     pub path: String,
     /// Whether the journal file exists.
     pub exists: bool,
@@ -967,11 +967,11 @@ pub struct GuardOut {
 pub fn guard(entries: &[JournalEntry], path: &Path, now: u64) -> (GuardOut, String) {
     let exists = path.exists();
     let mut t = if !exists {
-        format!("Журнала memory-guard нет ({}).\n", path.display())
+        format!("Журнала сторожа нет ({}).\n", path.display())
     } else if entries.is_empty() {
-        "Событий memory-guard нет.\n".to_owned()
+        "Событий сторожа нет.\n".to_owned()
     } else {
-        format!("Последние события memory-guard ({}):\n", entries.len())
+        format!("Последние события сторожа ({}):\n", entries.len())
     };
     for e in entries {
         let when = e.ts.map_or_else(|| "?".to_owned(), |ts| ago(now, ts));

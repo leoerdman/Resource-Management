@@ -3,7 +3,6 @@ import { backend } from "../api";
 import { cwdShort, errText, fmtBytes, fmtClock, fmtDateTime, fmtSecs } from "../format";
 import type { Author, GuardEvent, GuardMode, GuardSettings, GuardZone, Origin } from "../types";
 import { guardStore, useGuard } from "../guardStore";
-import { ConfirmDialog } from "./ConfirmDialog";
 import { Switch } from "./Controls";
 import { GuardSettingsPanel } from "./GuardSettingsPanel";
 import { OrphanCleanupCard } from "./OrphanCleanupCard";
@@ -75,11 +74,8 @@ interface Props {
   onToast: (ok: boolean, text: string) => void;
 }
 
-type Confirm = "retire" | "restore" | null;
-
 export function GuardTab({ onToast }: Props) {
   const { status, error, saving } = useGuard();
-  const [confirm, setConfirm] = useState<Confirm>(null);
 
   async function patchGuard(patch: Partial<GuardSettings>, done?: string): Promise<boolean> {
     try {
@@ -89,18 +85,6 @@ export function GuardTab({ onToast }: Props) {
     } catch (e) {
       onToast(false, errText(e));
       return false;
-    }
-  }
-
-  async function legacyAction(which: "retire" | "restore") {
-    try {
-      const b = await backend();
-      guardStore.setStatus(which === "retire" ? await b.retireLegacy() : await b.restoreLegacy());
-      onToast(true, which === "retire" ? "Старый сторож выгружен — теперь сторожит Resource Monitor" : "Старый сторож возвращён");
-      setConfirm(null);
-    } catch (e) {
-      onToast(false, errText(e));
-      throw e;
     }
   }
 
@@ -116,7 +100,7 @@ export function GuardTab({ onToast }: Props) {
     return <div className="empty">{error ? <span className="error">Сторож недоступен: {error}</span> : "Загрузка…"}</div>;
   }
 
-  const { mode, config: cfg, legacy } = status;
+  const { mode, config: cfg } = status;
 
   return (
     <div className="pane-scroll">
@@ -175,34 +159,6 @@ export function GuardTab({ onToast }: Props) {
           apply={patchGuard}
         />
 
-        {legacy.kind === "running" && (
-          <section className="banner banner-warn">
-            <div>
-              Работает старый сторож <b>memory-guard</b> (LaunchAgent{legacy.pid != null ? `, pid ${legacy.pid}` : ""}). Пока он
-              жив, сторож Resource Monitor ждёт, чтобы не снимать дважды.
-            </div>
-            <button className="btn btn-primary" onClick={() => setConfirm("retire")}>
-              Перенести в Resource Monitor
-            </button>
-          </section>
-        )}
-        {legacy.kind === "installed" && (
-          <section className="banner">
-            <div>Старый сторож memory-guard установлен, но сейчас не запущен.</div>
-            <button className="btn" onClick={() => setConfirm("retire")}>
-              Отключить насовсем
-            </button>
-          </section>
-        )}
-        {legacy.kind === "retired" && (
-          <div className="dim small legacy-quiet">
-            Старый сторож memory-guard перенесён в Resource Monitor.{" "}
-            <button className="btn-link" onClick={() => setConfirm("restore")}>
-              Вернуть
-            </button>
-          </div>
-        )}
-
         <GuardSettingsPanel cfg={cfg} configFile={status.config_file} saving={saving} onOpenConfig={openConfig} onToast={onToast} />
 
         <section>
@@ -219,29 +175,6 @@ export function GuardTab({ onToast }: Props) {
         </section>
       </div>
 
-      {confirm === "retire" && (
-        <ConfirmDialog
-          title="Перенести сторожа в Resource Monitor?"
-          confirmLabel="Перенести"
-          busyLabel="Переношу…"
-          onCancel={() => setConfirm(null)}
-          onConfirm={() => legacyAction("retire")}
-        >
-          Старый LaunchAgent будет выгружен, его plist переименован в <code>*.disabled-by-rmon</code> — это обратимо. Журнал
-          и файлы старого сторожа не трогаются.
-        </ConfirmDialog>
-      )}
-      {confirm === "restore" && (
-        <ConfirmDialog
-          title="Вернуть старый memory-guard?"
-          confirmLabel="Вернуть"
-          busyLabel="Возвращаю…"
-          onCancel={() => setConfirm(null)}
-          onConfirm={() => legacyAction("restore")}
-        >
-          plist вернётся на место и LaunchAgent снова запустится. Пока он работает, сторож Resource Monitor будет ждать.
-        </ConfirmDialog>
-      )}
     </div>
   );
 }

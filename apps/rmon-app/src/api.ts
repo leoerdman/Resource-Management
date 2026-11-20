@@ -21,9 +21,6 @@ export interface Backend {
   guardStatus(): Promise<GuardStatus>;
   /** Every guard event while the window is visible. Resolves to an unsubscribe function. */
   onGuardEvent(cb: (e: GuardEvent) => void): Promise<() => void>;
-  /** Unload the old memory-guard LaunchAgent (reversible). */
-  retireLegacy(): Promise<GuardStatus>;
-  restoreLegacy(): Promise<GuardStatus>;
 
   getSettings(): Promise<Settings>;
   /** Validated by the backend; rejects with a Russian message. Applied immediately. */
@@ -60,8 +57,6 @@ async function tauriBackend(): Promise<Backend> {
     killMany: (targets, confirm, reason) => invoke<KillManyResult[]>("kill_processes", { targets, confirm, reason }),
     guardStatus: () => invoke<GuardStatus>("guard_status"),
     onGuardEvent: (cb) => listen<GuardEvent>("rmon://guard", (e) => cb(e.payload)),
-    retireLegacy: () => invoke<GuardStatus>("guard_retire_legacy"),
-    restoreLegacy: () => invoke<GuardStatus>("guard_restore_legacy"),
     getSettings: () => invoke<Settings>("get_settings"),
     saveSettings: (settings) => invoke<Settings>("save_settings", { settings }),
     openConfig: () => invoke<void>("open_config"),

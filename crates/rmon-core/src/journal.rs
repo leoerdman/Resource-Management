@@ -1,4 +1,4 @@
-//! Журналы: действия rmon (`~/Library/Logs/rmon/actions.jsonl`) и события memory-guard.
+//! Журналы: действия rmon (`actions.jsonl`) и события сторожа памяти (`guard.jsonl`).
 
 use std::fs::{self, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -13,11 +13,6 @@ use crate::error::{Error, Result};
 /// Путь журнала действий — см. [`config::actions_log`].
 pub fn actions_path() -> PathBuf {
     config::actions_log()
-}
-
-/// Путь журнала старого memory-guard — см. [`config::legacy_guard_log`].
-pub fn guard_path() -> PathBuf {
-    config::legacy_guard_log()
 }
 
 /// Дописать строку в журнал действий.
@@ -65,10 +60,8 @@ fn line_ts(line: &str) -> Option<u64> {
     #[derive(Deserialize)]
     struct Ts {
         ts: Option<u64>,
-        t: Option<String>,
     }
-    let v: Ts = serde_json::from_str(line).ok()?;
-    v.ts.or_else(|| v.t.as_deref().and_then(parse_iso))
+    serde_json::from_str::<Ts>(line).ok()?.ts
 }
 
 /// Выбросить записи старше `cutoff` и, если файл больше `max_bytes`, самые старые сверх половины предела.
@@ -114,9 +107,6 @@ pub enum Source {
     /// Сторож памяти rmon.
     #[serde(rename = "guard")]
     Guard,
-    /// Старый сторож memory-guard (история до переноса).
-    #[serde(rename = "memory-guard")]
-    MemoryGuard,
 }
 
 /// Запись журнала для человека.
@@ -135,13 +125,12 @@ pub struct JournalEntry {
     pub raw: serde_json::Value,
 }
 
-/// Последние `limit` записей всех журналов (действия rmon, сторож rmon, старый memory-guard), новые сверху.
+/// Последние `limit` записей всех журналов (действия rmon и сторож), новые сверху.
 pub fn read_recent(limit: usize) -> Vec<JournalEntry> {
     let mut out: Vec<JournalEntry> = tail_lines(&actions_path(), limit)
         .into_iter()
         .map(|raw| JournalEntry { source: Source::Rmon, ts: raw["ts"].as_u64(), text: action_text(&raw), raw })
         .chain(guard_recent(limit))
-        .chain(guard_entries(&guard_path(), limit))
         .collect();
     out.sort_by_key(|e| std::cmp::Reverse(e.ts));
     out.truncate(limit);
@@ -161,39 +150,15 @@ pub fn guard_recent(limit: usize) -> Vec<JournalEntry> {
         .collect()
 }
 
-/// Последние `limit` событий сторожа: rmon и, для истории, старого memory-guard; новые сверху.
-/// Нет журналов — пустой список, не ошибка.
-pub fn read_guard_recent(limit: usize) -> Vec<JournalEntry> {
-    let mut out = guard_recent(limit);
-    out.extend(guard_entries(&guard_path(), limit));
-    out.sort_by_key(|e| std::cmp::Reverse(e.ts));
-    out.truncate(limit);
-    out
-}
-
-/// Последняя смена зоны memory-guard (событие `ev = "zone"`) — текущая зона сторожа.
+/// Последняя смена зоны сторожа (событие `ev = "zone"`) — текущая зона.
 /// Зона лежит в `raw["zone"]` (`green` / `yellow` / `red`), причина — в `raw["why"]`.
 /// `None` — журнала нет или среди последних событий нет смены зоны.
 pub fn last_guard_zone() -> Option<JournalEntry> {
-    read_guard_recent(ZONE_LOOKBACK).into_iter().find(|e| e.raw["ev"] == "zone")
+    guard_recent(ZONE_LOOKBACK).into_iter().find(|e| e.raw["ev"] == "zone")
 }
 
 /// Сколько последних событий просматривать в поисках смены зоны.
 const ZONE_LOOKBACK: usize = 200;
-
-fn guard_entries(path: &Path, limit: usize) -> Vec<JournalEntry> {
-    let mut out: Vec<JournalEntry> = tail_lines(path, limit)
-        .into_iter()
-        .map(|raw| JournalEntry {
-            source: Source::MemoryGuard,
-            ts: raw["t"].as_str().and_then(parse_iso),
-            text: guard_text(&raw),
-            raw,
-        })
-        .collect();
-    out.reverse();
-    out
-}
 
 /// Последние `limit` строк JSON файла в порядке файла. Файл читается с конца кусками,
 /// а не целиком: журнал сторожа за неделю — мегабайты.
@@ -240,67 +205,6 @@ fn action_text(v: &serde_json::Value) -> String {
     format!("[{who}] {name} ({pid}) {what}, {}", crate::fmt::bytes(freed))
 }
 
-fn guard_text(v: &serde_json::Value) -> String {
-    let ev = v["ev"].as_str().unwrap_or("?");
-    match ev {
-        "zone" => format!(
-            "зона {}: {} (свободно {} %, своп {} МБ)",
-            v["zone"].as_str().unwrap_or("?"),
-            v["why"].as_str().unwrap_or(""),
-            v["availablePct"].as_i64().unwrap_or(0),
-            v["swapUsedMb"].as_i64().unwrap_or(0)
-        ),
-        "kill" | "killed" => {
-            // Сторож пишет вид прогона в `kind`, размер — в `memMb`, причину — в `zoneWhy`.
-            let name = v["name"].as_str().or(v["exe"].as_str()).or(v["kind"].as_str()).unwrap_or("?");
-            let pid = v["pid"].as_i64().unwrap_or(0);
-            let what = match v["outcome"].as_str() {
-                Some("gone") => "не застал (процесс уже завершился)",
-                Some("reused") => "не тронул (pid переиспользован)",
-                _ => "снял",
-            };
-            let mut s = format!("сторож {what} {name} ({pid})");
-            if let Some(mb) = v["memMb"].as_u64() {
-                s.push_str(&format!(", {}", crate::fmt::bytes(mb * crate::model::MIB)));
-            }
-            if let Some(why) = v["why"].as_str().or(v["zoneWhy"].as_str()) {
-                s.push_str(" — ");
-                s.push_str(why);
-            }
-            s
-        }
-        "limit" => format!("сторож упёрся в предел снятий: {}", v["why"].as_str().unwrap_or("")),
-        _ => {
-            let mut s = ev.to_string();
-            if let Some(why) = v["why"].as_str() {
-                s.push_str(": ");
-                s.push_str(why);
-            }
-            s
-        }
-    }
-}
-
-/// «2026-11-20T09:48:46.625Z» → unix-секунды (только UTC с «Z»).
-fn parse_iso(s: &str) -> Option<u64> {
-    let (date, time) = s.split_once('T')?;
-    let mut d = date.split('-').map(|x| x.parse::<i64>());
-    let (y, m, day) = (d.next()?.ok()?, d.next()?.ok()?, d.next()?.ok()?);
-    let time = time.trim_end_matches('Z');
-    let mut t = time.split(':');
-    let (hh, mm) = (t.next()?.parse::<i64>().ok()?, t.next()?.parse::<i64>().ok()?);
-    let ss = t.next()?.split('.').next()?.parse::<i64>().ok()?;
-    // Дни от эпохи (алгоритм Хиннанта).
-    let y = if m <= 2 { y - 1 } else { y };
-    let era = y.div_euclid(400);
-    let yoe = y - era * 400;
-    let mp = (m + 9) % 12;
-    let doy = (153 * mp + 2) / 5 + day - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    let days = era * 146_097 + doe - 719_468;
-    u64::try_from(days * 86_400 + hh * 3600 + mm * 60 + ss).ok()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -314,26 +218,18 @@ mod tests {
     }
 
     #[test]
-    fn reads_guard_tail_newest_first() {
+    fn reads_tail_in_file_order() {
         let mut body = String::new();
         // Больше одного куска чтения, чтобы проверить чтение с конца.
         for i in 0..3000 {
-            body.push_str(&format!(
-                "{{\"t\":\"2026-11-20T10:00:00Z\",\"ev\":\"zone\",\"zone\":\"green\",\"why\":\"норма {i}\",\"availablePct\":40,\"swapUsedMb\":100}}\n"
-            ));
+            body.push_str(&format!("{{\"ts\":{i},\"why\":\"норма {i}\",\"pad\":\"{}\"}}\n", "x".repeat(40)));
         }
-        body.push_str(r#"{"t":"2026-11-20T10:18:59.035Z","ev":"kill","outcome":"term","pid":1402,"kind":"tsgo","memMb":2555,"zoneWhy":"давление жёлтое"}"#);
-        body.push('\n');
         let path = temp_log("tail", &body);
-        let got = guard_entries(&path, 3);
-        assert_eq!(got.len(), 3);
-        let size = crate::fmt::bytes(2555 * crate::model::MIB);
-        assert_eq!(got[0].text, format!("сторож снял tsgo (1402), {size} — давление жёлтое"));
-        assert!(got[1].text.contains("норма 2999"), "{}", got[1].text);
-        assert!(got[2].text.contains("норма 2998"), "{}", got[2].text);
-        assert_eq!(guard_entries(&path, 0).len(), 0);
-        assert_eq!(guard_entries(&path, 10_000).len(), 3001);
-        assert!(guard_entries(&path.with_file_name("нет.jsonl"), 5).is_empty(), "нет файла — пусто");
+        let got = tail_lines(&path, 3);
+        assert_eq!(got.iter().map(|v| v["ts"].as_u64().unwrap()).collect::<Vec<_>>(), [2997, 2998, 2999]);
+        assert!(tail_lines(&path, 0).is_empty());
+        assert_eq!(tail_lines(&path, 10_000).len(), 3000);
+        assert!(tail_lines(&path.with_file_name("нет.jsonl"), 5).is_empty(), "нет файла — пусто");
     }
 
     #[test]
@@ -351,11 +247,5 @@ mod tests {
         super::prune(&file, 0, 200).unwrap();
         assert!(std::fs::metadata(&file).unwrap().len() <= 100, "предел размера — до половины");
         std::fs::remove_dir_all(dir).ok();
-    }
-
-    #[test]
-    fn parses_iso() {
-        assert_eq!(super::parse_iso("1970-01-01T00:00:00Z"), Some(0));
-        assert_eq!(super::parse_iso("2026-11-20T09:48:46.625Z"), Some(1_795_168_126));
     }
 }

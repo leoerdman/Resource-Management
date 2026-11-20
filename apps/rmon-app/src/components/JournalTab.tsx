@@ -33,7 +33,7 @@ export function JournalTab() {
         <button className="btn" onClick={load} disabled={loading}>
           {loading ? "Обновляю…" : "Обновить"}
         </button>
-        <span className="dim small">Действия rmon и события memory-guard, новые сверху. Нажмите на строку — исходная запись.</span>
+        <span className="dim small">Действия rmon и события сторожа, новые сверху. Нажмите на строку — исходная запись.</span>
       </div>
       {error && <div className="error pad">Не удалось прочитать журнал: {error}</div>}
       {entries && !entries.length && <div className="empty">Журнал пуст</div>}

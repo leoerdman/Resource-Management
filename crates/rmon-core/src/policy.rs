@@ -113,7 +113,6 @@ fn spec(name: &str, exe: Option<&str>, path: Option<&str>, args: Option<&str>) -
 pub fn builtin_protect() -> Vec<RuleSpec> {
     let mut v = vec![
         spec("сам rmon", None, Some(r"/Resource Monitor\.app/|(^|[/\\])rmon-app(\.exe)?$"), None),
-        spec("сам сторож памяти", None, None, Some(r"memory-guard/guard\.ts")),
         spec("хуки сторожа машины", None, None, Some(r"Hooks/machine-guard/")),
     ];
     if cfg!(target_os = "macos") {
@@ -288,10 +287,6 @@ mod tests {
         assert!(matches!(
             p.classify(&proc(601, "sleep", Some("/bin/sleep"), &["sleep", "300"])),
             KillPolicy::Confirm(_)
-        ));
-        assert!(matches!(
-            p.classify(&proc(602, "bun", None, &["bun", "/x/memory-guard/guard.ts"])),
-            KillPolicy::Protected(_)
         ));
         assert!(matches!(
             p.classify(&proc(603, "rmon-app", Some("/Applications/Resource Monitor.app/Contents/MacOS/rmon-app"), &[])),

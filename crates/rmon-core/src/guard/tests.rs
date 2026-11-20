@@ -1,4 +1,4 @@
-//! Сценарии перенесены из `memory-guard/guard.test.ts` — поведение сторожа не должно измениться.
+//! Сценарии сторожа на снимке, похожем на настоящий инцидент.
 
 use super::author::{Env, chain_of, origin_of, project_from_path};
 use super::*;
@@ -103,13 +103,7 @@ fn incident() -> Vec<ProcessInfo> {
             900,
         ),
         p(87541, 1, "/opt/homebrew/bin/python3.11", "python3.11 worker.py", 1200),
-        p(
-            60000,
-            1,
-            "/Users/u/.bun/bin/bun",
-            "/Users/u/.bun/bin/bun /Users/u/Programming - Main/Hooks/memory-guard/guard.ts",
-            30,
-        ),
+        p(60000, 1, "/Users/u/.bun/bin/bun", "/Users/u/.bun/bin/bun /Users/u/bin/watch.ts", 30),
         p(61000, 1, "/Applications/M Code Desktop.app/Contents/Resources/bin/mcode-engine", "mcode-engine serve", 5000),
         p(61001, 61000, "/bin/zsh", "/bin/zsh -c bun test", 3),
         p(61002, 61001, "bun", "bun test packages/engine", 2900),

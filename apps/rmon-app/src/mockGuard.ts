@@ -9,7 +9,6 @@ import type {
   GuardMode,
   GuardStatus,
   GuardZone,
-  LegacyGuard,
   RuleSpec,
   Settings,
 } from "./types";
@@ -20,7 +19,7 @@ const MAX_EVENTS = 60;
 
 type GuardApi = Pick<
   Backend,
-  "guardStatus" | "onGuardEvent" | "retireLegacy" | "restoreLegacy" | "getSettings" | "saveSettings" | "openConfig" | "onOpenTab"
+  "guardStatus" | "onGuardEvent" | "getSettings" | "saveSettings" | "openConfig" | "onOpenTab"
 >;
 
 const ALLOW: AllowRule[] = [
@@ -97,7 +96,6 @@ export function createMockGuard(getDash: () => Dashboard): GuardApi & { tick(d: 
     thresholds: { hog_mb: 1024, hog_pct: 5, growing_mb_per_min: 15, idle_mb: 500, idle_age_min: 60, duplicate_count: 3 },
     config_file: "/Users/x/.config/rmon/config.toml",
   };
-  let legacy: LegacyGuard = { kind: "running", pid: 812 };
   let zone: GuardZone | null = null;
   let zoneWhy = "";
   let redSince: number | null = null;
@@ -162,8 +160,6 @@ export function createMockGuard(getDash: () => Dashboard): GuardApi & { tick(d: 
 
   const mode = (): GuardMode => {
     if (!settings.guard.enabled) return { kind: "off" };
-    if (legacy.kind === "running")
-      return { kind: "standby", detail: `работает старый memory-guard (pid ${legacy.pid ?? "?"})` };
     return settings.guard.dry_run ? { kind: "dry_run" } : { kind: "armed" };
   };
 
@@ -194,7 +190,6 @@ export function createMockGuard(getDash: () => Dashboard): GuardApi & { tick(d: 
       zone,
       zone_why: zoneWhy,
       red_for_secs: redSince != null ? now - redSince : 0,
-      legacy,
       orphans: { watched: 7, mem: 410 * MB, next_in_secs: 135 },
       config: { ...g, allow: ALLOW, never: NEVER },
       config_file: settings.config_file,
@@ -243,20 +238,6 @@ export function createMockGuard(getDash: () => Dashboard): GuardApi & { tick(d: 
     onGuardEvent: async (cb) => {
       listeners.add(cb);
       return () => listeners.delete(cb);
-    },
-    retireLegacy: async () => {
-      await delay(500);
-      if (legacy.kind !== "running" && legacy.kind !== "installed") throw "Старый сторож не установлен — переносить нечего";
-      legacy = { kind: "retired" };
-      emitMode();
-      return status();
-    },
-    restoreLegacy: async () => {
-      await delay(500);
-      if (legacy.kind !== "retired") throw "Старый сторож не был перенесён — возвращать нечего";
-      legacy = { kind: "running", pid: 9120 };
-      emitMode();
-      return status();
     },
     getSettings: async () => {
       await delay(60);

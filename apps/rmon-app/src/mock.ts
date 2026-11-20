@@ -412,11 +412,10 @@ guard.tick(current);
 
 const journal: JournalEntry[] = [
   { source: "rmon", ts: now0 - 640, text: "app: снят node (48120) SIGTERM, освобождено 1,2 ГБ — «зависший vite»", raw: { requested_by: "app", pid: 48120 } },
-  { source: "memory-guard", ts: now0 - 1900, text: "красная зона: снят tsgo (39911) 4,6 ГБ, своп 15,1 ГБ", raw: { action: "kill", pid: 39911, rss_mb: 4710 } },
   { source: "rmon", ts: now0 - 3600, text: "mcp: отказ — WindowServer защищён", raw: { requested_by: "mcp", pid: 152, refused: true } },
-  { source: "memory-guard", ts: now0 - 7200, text: "жёлтая зона: давление повышенное, своп 11,4 ГБ — без действий", raw: { level: "warning" } },
+  { source: "guard", ts: now0 - 7200, text: "зона жёлтая: давление жёлтое", raw: { ev: "zone", zone: "yellow" } },
   { source: "guard", ts: now0 - 1900, text: "сторож: убит tsgo (39911) 4,6 ГБ — проект M Code, Claude Code «Старт»", raw: { ev: "kill", pid: 39911 } },
-  { source: "memory-guard", ts: null, text: "сторож запущен (интервал 10 с)", raw: { event: "start" } },
+  { source: "guard", ts: now0 - 86400, text: "сторож заступил: боевой режим", raw: { ev: "start" } },
 ];
 
 const listeners = new Set<(d: Dashboard) => void>();
@@ -546,8 +545,6 @@ export function createMockBackend(): Backend {
     },
     guardStatus: guard.guardStatus,
     onGuardEvent: guard.onGuardEvent,
-    retireLegacy: guard.retireLegacy,
-    restoreLegacy: guard.restoreLegacy,
     getSettings: guard.getSettings,
     saveSettings: guard.saveSettings,
     openConfig: guard.openConfig,

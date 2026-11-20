@@ -35,7 +35,7 @@ use ts_rs::TS;
 use crate::analyze::Thresholds;
 use crate::error::{Error, Result};
 
-/// Правило политики — та же форма, что у `never`/`allow` в `memory-guard/config.json`.
+/// Правило политики — та же форма, что у `never` сторожа.
 /// Все заданные поля должны совпасть (регулярные выражения); пустое правило не совпадает ни с чем.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
@@ -70,8 +70,6 @@ pub struct PolicyConfig {
 pub struct PathsConfig {
     /// Журнал действий rmon.
     pub actions_log: Option<PathBuf>,
-    /// Журнал событий старого memory-guard (для истории во вкладке «Журнал»).
-    pub legacy_guard_log: Option<PathBuf>,
 }
 
 /// Настройки rmon.
@@ -210,14 +208,6 @@ pub fn actions_log() -> PathBuf {
         .unwrap_or_else(|| log_dir().join("actions.jsonl"))
 }
 
-/// Журнал событий старого memory-guard: env `RMON_GUARD_LOG` → конфиг → его каталог.
-/// Только для истории: сторож теперь в rmon и пишет в [`crate::guard::runner::events_log`].
-pub fn legacy_guard_log() -> PathBuf {
-    env_path("RMON_GUARD_LOG")
-        .or_else(|| global().paths.legacy_guard_log.clone())
-        .unwrap_or_else(|| home_dir().join("Programming - Main/Hooks/memory-guard/log/events.jsonl"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,7 +228,7 @@ mod tests {
         assert_eq!(c.thresholds.duplicate_count, Thresholds::default().duplicate_count);
         assert_eq!(c.policy.confirm[0].name, "Obsidian");
         assert!(c.guard.enabled);
-        assert_eq!(c.guard.sustain_secs, 12, "сторож по умолчанию — как memory-guard");
+        assert_eq!(c.guard.sustain_secs, 12, "сторож по умолчанию");
     }
 
     #[test]

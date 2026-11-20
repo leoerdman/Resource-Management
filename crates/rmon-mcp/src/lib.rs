@@ -91,7 +91,7 @@ impl RmonServer {
     #[tool(
         description = "Memory overview of the Mac: pressure, used/total, app/wired/compressed/cached/free, swap, \
         pressure and swap trend over the last 15 minutes, top 10 applications by memory, top 5 cleanup suspects, \
-        and the current zone of the rmon memory guard (formerly memory-guard). Call this first when the user asks about memory.",
+        and the current zone of the rmon memory guard. Call this first when the user asks about memory.",
         annotations(title = "Memory overview", read_only_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<OverviewOut>()
     )]
@@ -190,15 +190,15 @@ impl RmonServer {
     }
 
     #[tool(
-        description = "Recent events of the rmon memory guard (formerly memory-guard) (zone changes green/yellow/red, its own kills, \
+        description = "Recent events of the rmon memory guard (zone changes green/yellow/red, its own kills, \
         kill-rate limits), newest first. limit default 20. Missing journal is not an error: empty list.",
-        annotations(title = "memory-guard events", read_only_hint = true, open_world_hint = false),
+        annotations(title = "memory guard events", read_only_hint = true, open_world_hint = false),
         output_schema = schema_for_output::<GuardOut>()
     )]
     async fn guard_events(&self, Parameters(a): Parameters<GuardArgs>) -> Result<CallToolResult, ErrorData> {
         a.validate()?;
-        let entries = rmon_core::journal::read_guard_recent(a.limit as usize);
-        let (out, text) = view::guard(&entries, &rmon_core::journal::guard_path(), unix_now());
+        let entries = rmon_core::journal::guard_recent(a.limit as usize);
+        let (out, text) = view::guard(&entries, &rmon_core::guard::runner::events_log(), unix_now());
         reply(text, &out, false)
     }
 }

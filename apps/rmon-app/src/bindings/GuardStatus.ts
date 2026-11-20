@@ -4,7 +4,6 @@ import type { GuardEvent } from "./GuardEvent";
 import type { GuardMode } from "./GuardMode";
 import type { GuardOrphanWatch } from "./GuardOrphanWatch";
 import type { GuardZone } from "./GuardZone";
-import type { LegacyGuard } from "./LegacyGuard";
 
 /**
  * Состояние сторожа для окна, трея, MCP и CLI.
@@ -26,10 +25,6 @@ zone_why: string,
  * Сколько уже красное.
  */
 red_for_secs: number, 
-/**
- * Старый сторож.
- */
-legacy: LegacyGuard, 
 /**
  * Сироты под наблюдением автоочистки.
  */

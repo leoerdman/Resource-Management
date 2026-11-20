@@ -94,9 +94,9 @@ fn dashboard() -> Dashboard {
 }
 
 fn guard_entry() -> JournalEntry {
-    let raw = json!({"t": "2026-11-20T10:18:00Z", "ev": "zone", "zone": "red", "why": "давление жёлтое"});
+    let raw = json!({"ts": 1500, "ev": "zone", "zone": "red", "why": "давление жёлтое"});
     JournalEntry {
-        source: rmon_core::journal::Source::MemoryGuard,
+        source: rmon_core::journal::Source::Guard,
         ts: Some(1_500),
         text: "зона red: давление жёлтое".into(),
         raw,
@@ -315,7 +315,7 @@ fn guard_events_list_and_missing_journal() {
     assert!(text.contains("1 мин назад: зона red"), "{text}");
     let missing = dir.join("rmon-нет-такого-журнала.jsonl");
     let (out, text) = guard(&[], &missing, 0);
-    assert!(!out.exists && out.events.is_empty() && text.starts_with("Журнала memory-guard нет"), "{text}");
+    assert!(!out.exists && out.events.is_empty() && text.starts_with("Журнала сторожа нет"), "{text}");
 }
 
 #[test]

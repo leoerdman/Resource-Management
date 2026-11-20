@@ -24,7 +24,6 @@ impl Server {
         let mut child = Command::new(env!("CARGO_BIN_EXE_rmon-mcp"))
             // Отказы снятия пишутся в журнал действий — не в журнал владельца.
             .env("RMON_ACTIONS_LOG", scratch.join("actions.jsonl"))
-            .env("RMON_GUARD_LOG", scratch.join("events.jsonl"))
             .env("RMON_LOG_DIR", scratch)
             .env("RMON_CONFIG", scratch.join("config.toml"))
             .stdin(Stdio::piped())

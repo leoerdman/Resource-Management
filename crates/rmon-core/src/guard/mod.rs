@@ -1,13 +1,11 @@
 //! Сторож памяти: в красной зоне сам снимает самый большой прогон из списка «можно».
 //!
-//! Перенос `~/Programming - Main/Hooks/memory-guard` (Bun + LaunchAgent) в ядро rmon.
-//! Логика та же — и проверена теми же сценариями (см. тесты):
 //! 1. **Зона** по настоящему давлению памяти, а не по проценту ОЗУ: красная — давление
 //!    критическое, или доступно ≤ `min_available_pct`, или давление жёлтое и своп ≥ `swap_red_mb`.
 //! 2. **Гистерезис:** действует, только если красное держится `sustain_secs` подряд.
 //! 3. **Жертва** — самый большой по footprint процесс из `allow` (tsgo, tsc, vitest, jest,
-//!    node и bun прогонов), не из `never`, не сервер/watch, не меньше `min_victim_mb`, и —
-//!    дополнительно к старому сторожу — со свободной политикой снятия rmon.
+//!    node и bun прогонов), не из `never`, не сервер/watch, не меньше `min_victim_mb`, и
+//!    со свободной политикой снятия rmon.
 //! 4. **Снятие** через защитный слой rmon (`kill_with`, `Requester::Guard`): сверка личности,
 //!    SIGTERM → `term_grace_secs` → SIGKILL. Одна жертва за раз, потом `after_kill_secs`
 //!    паузы; не больше `limits` убийств в окне.
@@ -19,7 +17,6 @@
 //! поток, блокировка «один сторож на машину», журнал и уведомления — в [`runner`].
 
 pub mod author;
-pub mod legacy;
 pub mod orphans;
 pub mod runner;
 
@@ -153,7 +150,7 @@ const SERVERISH: &str =
 const APPISH_PARENT: &str =
     r"^/sbin/launchd$|^/Applications/|/[Cc]laude\.app/Contents/MacOS/|(^|/)(claude|mcode|mcode-engine)$";
 
-/// Встроенное «можно» — перенесено из `memory-guard/config.json` как есть.
+/// Встроенное «можно»: прогоны сборок и тестов.
 pub fn default_allow() -> Vec<AllowRule> {
     vec![
         allow("tsgo", "^tsgo$", None, Some(r"(^|\s)--(lsp|watch)(\s|=|$)"), None),
@@ -177,7 +174,6 @@ pub fn default_never() -> Vec<RuleSpec> {
         never("сессии claude CLI", Some(r"^claude(\.exe)?$"), None, None),
         never("движок M Code", Some(r"^mcode(-engine)?(\.exe)?$"), None, Some(r"(^|/)mcode-engine(\s|$)")),
         never("сам rmon", None, Some(r"/Resource Monitor\.app/|(^|[/\\])rmon(-app)?(\.exe)?$"), None),
-        never("старый сторож памяти", None, None, Some(r"memory-guard/guard\.ts")),
         never("хуки сторожа машины", None, None, Some(r"Hooks/machine-guard/")),
     ];
     if cfg!(target_os = "macos") {
@@ -221,7 +217,6 @@ pub fn default_never() -> Vec<RuleSpec> {
 }
 
 impl Default for GuardConfig {
-    /// Значения перенесены из `memory-guard/config.json` владельца.
     fn default() -> Self {
         Self {
             enabled: true,
@@ -581,7 +576,7 @@ pub enum GuardMode {
     Armed,
     /// Проба: «убил бы».
     DryRun,
-    /// Включён, но ждёт: работает другой сторож (старый memory-guard или второй rmon).
+    /// Включён, но ждёт: сторож уже работает в другом процессе rmon.
     Standby(String),
     /// Настройки не разобрались — сторож стоит.
     Broken(String),
