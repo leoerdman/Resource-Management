@@ -17,8 +17,15 @@ const NAME_ALIASES: &[(&str, &str)] = &[
     ("Telegram Helper", "Telegram"),
 ];
 
+/// Сессии Claude Code: бинарь `claude` (в том числе внутри `claude-code/<версия>/claude.app`
+/// приложения Claude) — отдельная группа, не путать с приложением «Claude».
+const CLAUDE_CODE: &str = "Claude Code";
+
 /// Имя приложения для процесса: `X.app` из пути, иначе имя процесса.
 pub fn app_group(name: &str, exe: Option<&str>) -> String {
+    if name == "claude" || exe.and_then(bundle_stem) == Some("claude") {
+        return CLAUDE_CODE.to_string();
+    }
     if let Some(stem) = exe.and_then(bundle_stem) {
         return canonical_bundle_name(stem).to_string();
     }
@@ -124,7 +131,16 @@ mod tests {
     #[test]
     fn falls_back_to_process_name() {
         assert_eq!(app_group("node", Some("/opt/homebrew/Cellar/node/25/bin/node")), "node");
-        assert_eq!(app_group("claude", None), "claude");
+        assert_eq!(app_group("claude", None), "Claude Code");
+        assert_eq!(
+            app_group(
+                "claude",
+                Some("/Users/u/Library/Application Support/Claude/claude-code/2.1.3/claude.app/Contents/MacOS/claude")
+            ),
+            "Claude Code",
+            "CLI-сессии — не приложение Claude"
+        );
+        assert_eq!(app_group("Claude", Some("/Applications/Claude.app/Contents/MacOS/Claude")), "Claude");
         assert_eq!(app_group("", None), "неизвестный");
     }
 
