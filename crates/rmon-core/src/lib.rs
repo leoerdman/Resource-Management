@@ -13,6 +13,7 @@ pub mod config;
 pub mod contract;
 pub mod error;
 pub mod fmt;
+pub mod guard;
 pub mod group;
 pub mod history;
 pub mod journal;

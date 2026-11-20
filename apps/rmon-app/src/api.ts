@@ -1,9 +1,12 @@
-import type { JournalEntry, KillArgs, KillOutcome, State } from "./types";
+import type { Dashboard, JournalEntry, KillArgs, KillOutcome, ProcessDetails } from "./types";
 
 export interface Backend {
-  getState(): Promise<State>;
-  /** Subscribe to state pushes (every 2 s). Resolves to an unsubscribe function. */
-  onState(cb: (s: State) => void): Promise<() => void>;
+  /**
+   * Subscribe to dashboards: the latest one arrives right away, then every 2 s (only while the
+   * window is visible) and right after a kill. Resolves to an unsubscribe function.
+   */
+  subscribe(cb: (d: Dashboard) => void): Promise<() => void>;
+  details(pid: number, startedAt: number): Promise<ProcessDetails>;
   kill(args: KillArgs): Promise<KillOutcome>;
   readJournal(): Promise<JournalEntry[]>;
 }
@@ -11,13 +14,21 @@ export interface Backend {
 export const IS_TAURI = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 async function tauriBackend(): Promise<Backend> {
-  const [{ invoke }, { listen }] = await Promise.all([
-    import("@tauri-apps/api/core"),
-    import("@tauri-apps/api/event"),
-  ]);
+  const { Channel, invoke } = await import("@tauri-apps/api/core");
   return {
-    getState: () => invoke<State>("get_state"),
-    onState: (cb) => listen<State>("rmon://state", (e) => cb(e.payload)),
+    subscribe: async (cb) => {
+      let live = true;
+      const ch = new Channel<Dashboard>();
+      ch.onmessage = (d) => {
+        if (live) cb(d);
+      };
+      // The backend keeps one channel: a new subscribe replaces the old one.
+      await invoke("subscribe", { channel: ch });
+      return () => {
+        live = false;
+      };
+    },
+    details: (pid, startedAt) => invoke<ProcessDetails>("process_details", { pid, startedAt }),
     kill: (args) => invoke<KillOutcome>("kill_process", { ...args }),
     readJournal: () => invoke<JournalEntry[]>("read_journal"),
   };
@@ -32,3 +43,6 @@ export function backend(): Promise<Backend> {
   }
   return backendP;
 }
+
+// Dev only: never keep two backends alive side by side after a hot update.
+if (import.meta.hot) import.meta.hot.accept(() => location.reload());

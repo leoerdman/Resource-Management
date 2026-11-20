@@ -60,6 +60,8 @@ pub struct Suspect {
     pub cmd: String,
     /// Ключ группы для подозреваемых одной природы (копии одной команды) — окно сворачивает их в одну карточку.
     pub group: Option<String>,
+    /// Заголовок группы для человека — один текст в окне, значке и MCP.
+    pub group_label: Option<String>,
     /// Время запуска (личность для снятия).
     #[ts(type = "number")]
     pub started_at: u64,
@@ -137,7 +139,8 @@ const DEV_NAMES: &[&str] = &[
     "esbuild", "vite", "npm", "pnpm", "yarn", "uv",
 ];
 
-fn is_dev(name: &str) -> bool {
+/// Dev-процесс: у таких одинаковые имена, и различает их только строка запуска и каталог.
+pub fn is_dev(name: &str) -> bool {
     DEV_NAMES.iter().any(|d| name == *d || (name.starts_with(d) && name[d.len()..].chars().all(|c| c.is_ascii_digit() || c == '.')))
 }
 
@@ -193,6 +196,7 @@ pub fn analyze(history: &History, th: &Thresholds) -> Vec<Suspect> {
             app_group: p.app_group.clone(),
             cmd: short_cmd(p),
             group: None,
+            group_label: None,
             started_at: p.started_at,
             kind,
             score,
@@ -263,6 +267,7 @@ pub fn analyze(history: &History, th: &Thresholds) -> Vec<Suspect> {
         let total: u64 = extra.iter().map(|p| p.reclaim()).sum();
         let short: String = cmd.chars().take(60).collect();
         let group = format!("dup:{short}");
+        let group_label = format!("{} брошенных копий «{short}» — вместе {}", extra.len(), fmt::bytes(total));
         for p in extra.iter().copied() {
             put(Suspect {
                 pid: p.pid,
@@ -270,6 +275,7 @@ pub fn analyze(history: &History, th: &Thresholds) -> Vec<Suspect> {
                 app_group: p.app_group.clone(),
                 cmd: short_cmd(p),
                 group: Some(group.clone()),
+                group_label: Some(group_label.clone()),
                 started_at: p.started_at,
                 kind: SuspectKind::Duplicate,
                 score: (30.0 + 40.0 * (total as f64 / (4.0 * GIB as f64)).min(1.0)) as u8,

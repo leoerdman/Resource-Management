@@ -1,21 +1,27 @@
 import type { KillPolicy, Pressure, ProcState, SuspectKind } from "./types";
+// Labels come from Rust (rmon-core) so the window, CLI and MCP say the same words.
+import labels from "./bindings/labels.json" with { type: "json" };
 
 const UNITS = ["Б", "КБ", "МБ", "ГБ", "ТБ"];
 
-/** Number with Russian decimal comma, one decimal, ",0" dropped. */
+/** One decimal with Russian comma, ",0" dropped. Rounds like Rust: Math.round(v * 10). */
 function num1(v: number): string {
-  const s = v.toFixed(1);
-  return (s.endsWith(".0") ? s.slice(0, -2) : s).replace(".", ",");
+  const t = Math.round(v * 10);
+  const int = Math.trunc(t / 10);
+  const frac = t % 10;
+  return frac ? `${int},${frac}` : String(int);
 }
 
-/** "3,1 ГБ", "412 МБ" — base 1024, one decimal below 100, integers from 100 up. */
+/**
+ * "3,1 ГБ", "412 МБ" — base 1024; unit steps up at 999,5 (so "1 ГБ", never "1000 МБ");
+ * one decimal below 100, whole numbers from 100. Reference: bindings/format-cases.json.
+ */
 export function fmtBytes(bytes: number | null | undefined): string {
   if (bytes == null || !Number.isFinite(bytes)) return "—";
   const neg = bytes < 0;
   let v = Math.abs(bytes);
   let u = 0;
-  // Switch unit at 1000 so we print "0,98 ГБ" → "1 ГБ" instead of "1003 МБ".
-  while (v >= 1000 && u < UNITS.length - 1) {
+  while (v >= 999.5 && u < UNITS.length - 1) {
     v /= 1024;
     u++;
   }
@@ -41,7 +47,7 @@ export function fmtPct(v: number): string {
 
 /** Age from unix seconds: "45 с", "12 мин", "3 ч 5 мин", "4 д 2 ч". */
 export function fmtAge(startedAt: number, now: number): string {
-  let s = Math.max(0, Math.floor(now - startedAt));
+  const s = Math.max(0, Math.floor(now - startedAt));
   if (s < 60) return `${s} с`;
   const m = Math.floor(s / 60);
   if (m < 60) return `${m} мин`;
@@ -63,38 +69,10 @@ export function fmtDateTime(ts: number): string {
   return `${pad(d.getDate())}.${pad(d.getMonth() + 1)} ${fmtClock(ts)}`;
 }
 
-export const PRESSURE_LABEL: Record<Pressure, string> = {
-  normal: "нормальное",
-  warning: "повышенное",
-  critical: "критическое",
-};
-
-export const STATE_LABEL: Record<ProcState, string> = {
-  running: "работает",
-  sleeping: "спит",
-  stopped: "остановлен",
-  zombie: "зомби",
-  unknown: "неизвестно",
-};
-
-export const KIND_LABEL: Record<SuspectKind, string> = {
-  hog: "Большой",
-  growing: "Растёт",
-  orphan: "Сирота",
-  idle: "Простаивает",
-  duplicate: "Дубль",
-  zombie: "Зомби",
-};
-
-export const POLICY_LABEL: Record<KillPolicy["kind"], string> = {
-  protected: "защищён",
-  confirm: "с подтверждением",
-  free: "можно снять",
-};
-
-export function policyReason(p: KillPolicy): string {
-  return p.kind === "free" ? "" : p.reason;
-}
+export const PRESSURE_LABEL: Record<Pressure, string> = labels.pressure;
+export const STATE_LABEL: Record<ProcState, string> = labels.proc_state;
+export const KIND_LABEL: Record<SuspectKind, string> = labels.suspect_kind;
+export const POLICY_LABEL: Record<KillPolicy["kind"], string> = labels.policy;
 
 /** Errors from Tauri invoke arrive as plain strings; normalize anything else. */
 export function errText(e: unknown): string {
@@ -119,23 +97,49 @@ export function clause(s: string): string {
   return c.charAt(0).toUpperCase() + c.slice(1);
 }
 
+/** Process names that say nothing by themselves — the command line has to tell what they run. */
+export const GENERIC_NAMES = new Set([
+  "node", "claude", "bun", "deno", "python", "python3", "Python", "ruby", "java", "sh", "bash", "zsh",
+  "npm", "npx", "pnpm", "uv", "uvx", "tsx",
+]);
+
+const PKG_RE = /node_modules\/(?:\.bin\/)?((?:@[^/\s]+\/)?[^/\s]+)/g;
+
 /**
- * Short hint of what a generic process runs: "vite", "@playwright/mcp", "jest --watch".
- * Returns "" when the args add nothing beyond the name.
+ * Short hint of what a generic process runs, from its command line:
+ * "vite", "@playwright/mcp", "jest --watch", "uvicorn app:app". "" when nothing useful.
  */
-export function cmdHint(name: string, args: string[]): string {
-  const rest = args.slice(1);
-  const i = rest.findIndex((a) => !a.startsWith("-"));
-  if (i < 0) return rest.join(" ").slice(0, 48);
-  const main = rest[i];
-  let label: string;
-  const nm = main.lastIndexOf("node_modules/");
-  if (nm >= 0) {
-    const parts = main.slice(nm + 13).split("/");
-    label = parts[0] === ".bin" ? parts[1] ?? "" : parts[0].startsWith("@") ? `${parts[0]}/${parts[1] ?? ""}` : parts[0];
-  } else {
-    label = main.slice(main.lastIndexOf("/") + 1);
+export function cmdHint(name: string, cmd: string | string[]): string {
+  const line = Array.isArray(cmd) ? cmd.join(" ") : cmd;
+  const tokens = line.trim().split(/\s+/).filter(Boolean);
+  // Drop argv[0] when it is the program itself ("node", "/opt/homebrew/bin/node").
+  if (tokens.length && (tokens[0] === name || tokens[0].endsWith("/" + name))) tokens.shift();
+  if (!tokens.length) return "";
+
+  let label = "";
+  let restFrom = -1;
+  // A package inside node_modules is the most telling part: take the last one.
+  for (let i = 0; i < tokens.length; i++) {
+    PKG_RE.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    let last: string | null = null;
+    while ((m = PKG_RE.exec(tokens[i]))) last = m[1];
+    if (last) {
+      label = last;
+      restFrom = i + 1;
+    }
   }
-  const s = [label, ...rest.slice(i + 1)].join(" ").trim();
-  return s === name ? "" : s.length > 48 ? s.slice(0, 47) + "…" : s;
+  if (!label) {
+    const i = tokens.findIndex((t) => !t.startsWith("-"));
+    if (i < 0) return shorten(tokens.join(" "));
+    // "-m uvicorn" style: skip flags, take the first word (basename of a path).
+    label = tokens[i].slice(tokens[i].lastIndexOf("/") + 1);
+    restFrom = i + 1;
+  }
+  const s = [label, ...tokens.slice(restFrom)].join(" ").trim();
+  return s === name ? "" : shorten(s);
+}
+
+function shorten(s: string, max = 48): string {
+  return s.length > max ? s.slice(0, max - 1) + "…" : s;
 }

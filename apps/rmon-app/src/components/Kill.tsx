@@ -1,5 +1,6 @@
 import { POLICY_LABEL } from "../format";
 import type { KillPolicy, KillTarget } from "../types";
+import type { KillRequest } from "./KillDialog";
 
 export function LockIcon() {
   return (
@@ -21,7 +22,7 @@ export function PolicyTag({ policy }: { policy: KillPolicy }) {
 }
 
 /** «Снять» button; for protected processes renders a lock instead (no button at all). */
-export function KillButton({ target, onKill }: { target: KillTarget; onKill: (t: KillTarget) => void }) {
+export function KillButton({ target, onKill }: { target: KillTarget; onKill: (r: KillRequest) => void }) {
   if (target.policy.kind === "protected") {
     return (
       <span className="locked" title={target.policy.reason}>
@@ -34,7 +35,7 @@ export function KillButton({ target, onKill }: { target: KillTarget; onKill: (t:
       className={target.policy.kind === "confirm" ? "btn btn-kill btn-warn" : "btn btn-kill"}
       onClick={(e) => {
         e.stopPropagation();
-        onKill(target);
+        onKill({ targets: [target] });
       }}
     >
       Снять

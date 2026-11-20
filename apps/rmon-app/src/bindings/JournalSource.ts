@@ -3,4 +3,4 @@
 /**
  * Откуда запись.
  */
-export type JournalSource = "rmon" | "memory-guard";
+export type JournalSource = "rmon" | "guard" | "memory-guard";

@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { cmdHint, fmtAge, fmtBytes, fmtGrowth, fmtPct, plural, STATE_LABEL } from "../format";
-import type { KillTarget, ProcessRow } from "../types";
+import { cmdHint, GENERIC_NAMES, fmtAge, fmtBytes, fmtGrowth, fmtPct, plural, STATE_LABEL } from "../format";
+import type { KillTarget, ProcessRow, ProcKey } from "../types";
+import type { KillRequest } from "./KillDialog";
 import { KillButton, PolicyTag } from "./Kill";
 
 const ROW_H = 24;
@@ -54,16 +55,27 @@ export function processTarget(r: ProcessRow, from: string): KillTarget {
 interface Props {
   processes: ProcessRow[];
   now: number;
-  onKill: (t: KillTarget) => void;
+  onKill: (r: KillRequest) => void;
+  onOpen: (k: ProcKey) => void;
+  /** Bumped by ⌘F: focus the filter. */
+  focusSignal: number;
 }
 
-export const ProcessesTab = memo(function ProcessesTab({ processes, now, onKill }: Props) {
+export const ProcessesTab = memo(function ProcessesTab({ processes, now, onKill, onOpen, focusSignal }: Props) {
   const [filter, setFilter] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("mem");
   const [desc, setDesc] = useState(true);
   const [scrollTop, setScrollTop] = useState(0);
   const [viewH, setViewH] = useState(600);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const filterRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (focusSignal) {
+      filterRef.current?.focus();
+      filterRef.current?.select();
+    }
+  }, [focusSignal]);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -121,10 +133,17 @@ export const ProcessesTab = memo(function ProcessesTab({ processes, now, onKill 
     <div className="procs">
       <div className="toolbar">
         <input
+          ref={filterRef}
           className="filter"
           type="search"
-          placeholder="Фильтр: имя, приложение, аргументы, pid"
+          placeholder="Фильтр: имя, приложение, аргументы, pid  (⌘F)"
           value={filter}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              setFilter("");
+              e.currentTarget.blur();
+            }
+          }}
           onChange={(e) => {
             setFilter(e.target.value);
             scrollRef.current?.scrollTo({ top: 0 });
@@ -154,7 +173,7 @@ export const ProcessesTab = memo(function ProcessesTab({ processes, now, onKill 
         <div className="pbody" style={{ height: n * ROW_H }}>
           <div style={{ transform: `translateY(${start * ROW_H}px)` }}>
             {visible.map((r) => (
-              <Row key={r.pid} r={r} now={now} onKill={onKill} />
+              <Row key={r.pid} r={r} now={now} onKill={onKill} onOpen={onOpen} />
             ))}
           </div>
         </div>
@@ -164,16 +183,16 @@ export const ProcessesTab = memo(function ProcessesTab({ processes, now, onKill 
   );
 });
 
-const Row = memo(function Row({ r, now, onKill }: { r: ProcessRow; now: number; onKill: (t: KillTarget) => void }) {
+const Row = memo(function Row({ r, now, onKill, onOpen }: { r: ProcessRow; now: number; onKill: (r: KillRequest) => void; onOpen: (k: ProcKey) => void }) {
   const g = r.growth_per_min;
   const cmd = r.args.length ? r.args.join(" ") : r.exe ?? r.name;
-  const hint = r.app_group === r.name ? cmdHint(r.name, r.args) : "";
+  const hint = GENERIC_NAMES.has(r.name) ? cmdHint(r.name, r.args) : "";
   return (
-    <div className={`prow st-${r.state}`} role="row">
+    <div className={`prow st-${r.state}`} role="row" onClick={() => onOpen(r)}>
       <div className="num dim">{r.pid}</div>
       <div className="name" title={cmd}>
         {r.name}
-        {r.app_group !== r.name ? <span className="dim"> · {r.app_group}</span> : hint && <span className="dim"> {hint}</span>}
+        {hint ? <span className="dim"> {hint}</span> : r.app_group !== r.name && <span className="dim"> · {r.app_group}</span>}
       </div>
       <div className="num strong" title={r.footprint == null ? "footprint недоступен (нет прав), показан RSS" : undefined}>
         {fmtBytes(r.footprint ?? r.rss)}

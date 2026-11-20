@@ -15,9 +15,9 @@ pub fn actions_path() -> PathBuf {
     config::actions_log()
 }
 
-/// Путь журнала memory-guard — см. [`config::guard_log`].
+/// Путь журнала старого memory-guard — см. [`config::legacy_guard_log`].
 pub fn guard_path() -> PathBuf {
-    config::guard_log()
+    config::legacy_guard_log()
 }
 
 /// Дописать строку в журнал действий.
@@ -37,7 +37,10 @@ pub enum Source {
     /// Действия rmon.
     #[serde(rename = "rmon")]
     Rmon,
-    /// Сторож памяти.
+    /// Сторож памяти rmon.
+    #[serde(rename = "guard")]
+    Guard,
+    /// Старый сторож memory-guard (история до переноса).
     #[serde(rename = "memory-guard")]
     MemoryGuard,
 }
@@ -58,11 +61,17 @@ pub struct JournalEntry {
     pub raw: serde_json::Value,
 }
 
-/// Последние `limit` записей обоих журналов, новые сверху.
+/// Последние `limit` записей всех журналов (действия rmon, сторож, старый memory-guard), новые сверху.
 pub fn read_recent(limit: usize) -> Vec<JournalEntry> {
     let mut out: Vec<JournalEntry> = tail_lines(&actions_path(), limit)
         .into_iter()
         .map(|raw| JournalEntry { source: Source::Rmon, ts: raw["ts"].as_u64(), text: action_text(&raw), raw })
+        .chain(crate::guard::runner::read_events(limit).into_iter().map(|ev| JournalEntry {
+            source: Source::Guard,
+            ts: Some(ev.ts),
+            text: ev.text(),
+            raw: serde_json::to_value(&ev).unwrap_or_default(),
+        }))
         .chain(tail_lines(&guard_path(), limit).into_iter().map(|raw| JournalEntry {
             source: Source::MemoryGuard,
             ts: raw["t"].as_str().and_then(parse_iso),

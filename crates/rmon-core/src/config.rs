@@ -14,6 +14,10 @@
 //! [[policy.confirm]]            # добавить «только с подтверждением»
 //! name = "Obsidian"
 //! path = "/Obsidian\\.app/"
+//!
+//! [guard]                       # сторож памяти (см. rmon_core::guard)
+//! enabled = true
+//! dry_run = false
 //! ```
 //!
 //! Конфиг может только ужесточить политику: сделать процесс `Free` из него нельзя.
@@ -47,21 +51,13 @@ pub struct RuleSpec {
 }
 
 /// Расширение политики снятия.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct PolicyConfig {
     /// Дополнительные «никогда».
     pub protect: Vec<RuleSpec>,
     /// Дополнительные «только с подтверждением».
     pub confirm: Vec<RuleSpec>,
-    /// Брать список `never` сторожа памяти как «только с подтверждением».
-    pub use_memory_guard: bool,
-}
-
-impl Default for PolicyConfig {
-    fn default() -> Self {
-        Self { protect: Vec::new(), confirm: Vec::new(), use_memory_guard: true }
-    }
 }
 
 /// Переопределение путей.
@@ -70,10 +66,8 @@ impl Default for PolicyConfig {
 pub struct PathsConfig {
     /// Журнал действий rmon.
     pub actions_log: Option<PathBuf>,
-    /// Журнал событий memory-guard.
-    pub guard_log: Option<PathBuf>,
-    /// `config.json` memory-guard.
-    pub guard_config: Option<PathBuf>,
+    /// Журнал событий старого memory-guard (для истории во вкладке «Журнал»).
+    pub legacy_guard_log: Option<PathBuf>,
 }
 
 /// Настройки rmon.
@@ -86,6 +80,8 @@ pub struct Config {
     pub policy: PolicyConfig,
     /// Пути.
     pub paths: PathsConfig,
+    /// Сторож памяти.
+    pub guard: crate::guard::GuardConfig,
 }
 
 impl Config {
@@ -163,23 +159,12 @@ pub fn actions_log() -> PathBuf {
         .unwrap_or_else(|| log_dir().join("actions.jsonl"))
 }
 
-/// Каталог сторожа памяти владельца (есть только на его Mac).
-fn guard_home() -> PathBuf {
-    home_dir().join("Programming - Main/Hooks/memory-guard")
-}
-
-/// Журнал memory-guard: env `RMON_GUARD_LOG` → конфиг → каталог сторожа.
-pub fn guard_log() -> PathBuf {
+/// Журнал событий старого memory-guard: env `RMON_GUARD_LOG` → конфиг → его каталог.
+/// Только для истории: сторож теперь в rmon и пишет в [`crate::guard::runner::events_log`].
+pub fn legacy_guard_log() -> PathBuf {
     env_path("RMON_GUARD_LOG")
-        .or_else(|| global().paths.guard_log.clone())
-        .unwrap_or_else(|| guard_home().join("log/events.jsonl"))
-}
-
-/// `config.json` memory-guard: env `RMON_GUARD_CONFIG` → конфиг → каталог сторожа.
-pub fn guard_config() -> PathBuf {
-    env_path("RMON_GUARD_CONFIG")
-        .or_else(|| global().paths.guard_config.clone())
-        .unwrap_or_else(|| guard_home().join("config.json"))
+        .or_else(|| global().paths.legacy_guard_log.clone())
+        .unwrap_or_else(|| home_dir().join("Programming - Main/Hooks/memory-guard/log/events.jsonl"))
 }
 
 #[cfg(test)]
@@ -201,7 +186,8 @@ mod tests {
         assert_eq!(c.thresholds.hog_bytes, 2 * 1024 * 1024 * 1024);
         assert_eq!(c.thresholds.duplicate_count, Thresholds::default().duplicate_count);
         assert_eq!(c.policy.confirm[0].name, "Obsidian");
-        assert!(c.policy.use_memory_guard);
+        assert!(c.guard.enabled);
+        assert_eq!(c.guard.sustain_secs, 12, "сторож по умолчанию — как memory-guard");
     }
 
     #[test]

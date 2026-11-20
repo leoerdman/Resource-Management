@@ -27,6 +27,10 @@ cmd: string,
  */
 group: string | null, 
 /**
+ * Заголовок группы для человека — один текст в окне, значке и MCP.
+ */
+group_label: string | null, 
+/**
  * Время запуска (личность для снятия).
  */
 started_at: number, 

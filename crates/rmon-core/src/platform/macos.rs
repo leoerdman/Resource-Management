@@ -189,6 +189,15 @@ impl Platform for MacOsPlatform {
         }
     }
 
+    fn env(&mut self, pid: i32, keys: &[&str]) -> Result<Vec<(String, String)>> {
+        let Some((_, env)) = procargs(pid) else { return Ok(Vec::new()) };
+        Ok(env
+            .into_iter()
+            .filter_map(|kv| kv.split_once('=').map(|(k, v)| (k.to_string(), v.to_string())))
+            .filter(|(k, _)| keys.contains(&k.as_str()))
+            .collect())
+    }
+
     fn cwd(&mut self, pid: i32) -> Result<Option<String>> {
         let Some(info) = pidinfo::<libc::proc_vnodepathinfo>(pid, libc::PROC_PIDVNODEPATHINFO) else {
             return Ok(None);
@@ -315,37 +324,48 @@ fn proc_name(pid: i32) -> Option<String> {
 
 /// `KERN_PROCARGS2`: argc, путь запуска, выравнивание нулями, argv[], окружение.
 fn proc_args(pid: i32) -> Vec<String> {
+    procargs(pid).map(|(args, _)| args).unwrap_or_default()
+}
+
+/// Аргументы и окружение процесса (окружение — только своих процессов: так решает ядро).
+fn procargs(pid: i32) -> Option<(Vec<String>, Vec<String>)> {
     let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
-    let mut size: libc::size_t = 0;
     let mut argmax: libc::c_int = 0;
     let mut amsize = size_of::<libc::c_int>();
     let mut am_mib = [libc::CTL_KERN, libc::KERN_ARGMAX];
     // SAFETY: читаем int в живую переменную.
-    if unsafe { libc::sysctl(am_mib.as_mut_ptr(), 2, (&mut argmax as *mut libc::c_int).cast(), &mut amsize, std::ptr::null_mut(), 0) } == 0 {
-        size = argmax.max(0) as usize;
+    if unsafe { libc::sysctl(am_mib.as_mut_ptr(), 2, (&mut argmax as *mut libc::c_int).cast(), &mut amsize, std::ptr::null_mut(), 0) } != 0 {
+        return None;
     }
+    let mut size = argmax.max(0) as usize;
     if size == 0 {
-        return Vec::new();
+        return None;
     }
     let mut buf = vec![0u8; size];
     // SAFETY: буфер size байт; ядро пишет не больше и обновляет size.
     if unsafe { libc::sysctl(mib.as_mut_ptr(), 3, buf.as_mut_ptr().cast(), &mut size, std::ptr::null_mut(), 0) } != 0 || size < 4 {
-        return Vec::new();
+        return None;
     }
     buf.truncate(size);
+    Some(parse_procargs(&buf))
+}
+
+/// Разбор буфера `KERN_PROCARGS2` (отдельно — для теста без системы).
+fn parse_procargs(buf: &[u8]) -> (Vec<String>, Vec<String>) {
+    if buf.len() < 4 {
+        return (Vec::new(), Vec::new());
+    }
     let argc = i32::from_ne_bytes([buf[0], buf[1], buf[2], buf[3]]).max(0) as usize;
     let mut rest = &buf[4..];
-    // путь запуска
-    match rest.iter().position(|&b| b == 0) {
-        Some(i) => rest = &rest[i..],
-        None => return Vec::new(),
-    }
+    // Путь запуска, затем нули выравнивания.
+    let Some(end) = rest.iter().position(|&b| b == 0) else { return (Vec::new(), Vec::new()) };
+    rest = &rest[end..];
     let start = rest.iter().position(|&b| b != 0).unwrap_or(rest.len());
     rest = &rest[start..];
-    rest.split(|&b| b == 0)
-        .take(argc)
-        .map(|s| String::from_utf8_lossy(s).into_owned())
-        .collect()
+    let mut parts = rest.split(|&b| b == 0);
+    let args = parts.by_ref().take(argc).map(|s| String::from_utf8_lossy(s).into_owned()).collect();
+    let env = parts.take_while(|s| !s.is_empty()).map(|s| String::from_utf8_lossy(s).into_owned()).collect();
+    (args, env)
 }
 
 fn cstr(chars: &[libc::c_char]) -> Option<String> {
@@ -379,6 +399,23 @@ fn sysctl_i32(name: &str) -> Result<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_procargs_with_env() {
+        let mut buf = 2i32.to_ne_bytes().to_vec();
+        buf.extend_from_slice(b"/bin/x\0\0\0x\0-v\0HOME=/h\0SECRET=1\0\0junk");
+        let (args, env) = parse_procargs(&buf);
+        assert_eq!(args, ["x", "-v"]);
+        assert_eq!(env, ["HOME=/h", "SECRET=1"]);
+    }
+
+    #[test]
+    fn reads_only_requested_env_keys() {
+        let mut p = MacOsPlatform::new().unwrap();
+        let env = p.env(std::process::id() as i32, &["HOME"]).unwrap();
+        assert_eq!(env.len(), 1);
+        assert_eq!(env[0].0, "HOME");
+    }
 
     #[test]
     fn sees_foreign_processes() {

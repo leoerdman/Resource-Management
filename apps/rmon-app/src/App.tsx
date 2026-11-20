@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { backend } from "./api";
 import { errText } from "./format";
-import type { KillTarget, State } from "./types";
+import type { Dashboard, ProcKey } from "./types";
 import { Header } from "./components/Header";
 import { SuspectsTab } from "./components/SuspectsTab";
 import { AppsTab } from "./components/AppsTab";
 import { ProcessesTab } from "./components/ProcessesTab";
 import { JournalTab } from "./components/JournalTab";
-import { KillDialog, type KillResult } from "./components/KillDialog";
+import { KillDialog, type KillRequest, type KillResult } from "./components/KillDialog";
+import { DetailsDrawer } from "./components/DetailsDrawer";
 import { Toasts, type Toast } from "./components/Toasts";
 
 type Tab = "suspects" | "apps" | "procs" | "journal";
@@ -19,46 +20,70 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "journal", label: "Журнал" },
 ];
 
+function isTyping(t: EventTarget | null): boolean {
+  return t instanceof HTMLElement && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
+}
+
 export default function App() {
-  const [state, setState] = useState<State | null>(null);
+  const [dash, setDash] = useState<Dashboard | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("suspects");
-  const [killTarget, setKillTarget] = useState<KillTarget | null>(null);
+  const [killReq, setKillReq] = useState<KillRequest | null>(null);
+  const [details, setDetails] = useState<ProcKey | null>(null);
+  const [filterFocus, setFilterFocus] = useState(0);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const toastId = useRef(0);
 
-  // Subscribe to state pushes. While the window is hidden we keep only the latest
-  // payload and skip rendering, so a backgrounded window costs ~nothing.
+  // Subscribe to dashboards. The backend only pushes while the window is visible; the hidden
+  // check here also covers the browser mock.
   useEffect(() => {
     let alive = true;
-    let unlisten: (() => void) | null = null;
-    let pending: State | null = null;
-    const apply = (s: State) => {
+    let off: (() => void) | null = null;
+    let pending: Dashboard | null = null;
+    const apply = (d: Dashboard) => {
       if (!alive) return;
-      if (document.hidden) pending = s;
-      else setState(s);
+      if (document.hidden) pending = d;
+      else setDash(d);
     };
     const onVisible = () => {
       if (!document.hidden && pending) {
-        setState(pending);
+        setDash(pending);
         pending = null;
       }
     };
     document.addEventListener("visibilitychange", onVisible);
     backend()
-      .then(async (b) => {
-        const off = await b.onState(apply);
-        if (!alive) off();
-        else unlisten = off;
-        apply(await b.getState());
+      .then((b) => b.subscribe(apply))
+      .then((unsub) => {
+        if (alive) off = unsub;
+        else unsub();
       })
       .catch((e) => alive && setLoadError(errText(e)));
     return () => {
       alive = false;
-      unlisten?.();
+      off?.();
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, []);
+
+  // Keyboard: ⌘F → filter in «Процессы», 1–4 → tabs.
+  const modalOpen = killReq != null;
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (modalOpen) return;
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        setTab("procs");
+        setFilterFocus((n) => n + 1);
+        return;
+      }
+      if (e.metaKey || e.ctrlKey || e.altKey || isTyping(e.target)) return;
+      const i = ["1", "2", "3", "4"].indexOf(e.key);
+      if (i >= 0) setTab(TABS[i].id);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [modalOpen]);
 
   const pushToast = useCallback((ok: boolean, text: string) => {
     const id = ++toastId.current;
@@ -68,26 +93,25 @@ export default function App() {
 
   const dismissToast = useCallback((id: number) => setToasts((ts) => ts.filter((t) => t.id !== id)), []);
 
-  const onKill = useCallback((t: KillTarget) => {
-    if (t.policy.kind !== "protected") setKillTarget(t);
+  const onKill = useCallback((req: KillRequest) => {
+    const targets = req.targets.filter((t) => t.policy.kind !== "protected");
+    if (targets.length) setKillReq({ ...req, targets });
   }, []);
+
+  const onOpen = useCallback((k: ProcKey) => setDetails({ pid: k.pid, started_at: k.started_at }), []);
+  const closeDetails = useCallback(() => setDetails(null), []);
 
   const onKillResult = useCallback(
     (r: KillResult) => {
-      setKillTarget(null);
+      setKillReq(null);
       pushToast(r.ok, r.text);
-      if (r.ok) {
-        // Pull a fresh snapshot right away instead of waiting for the next push.
-        backend()
-          .then((b) => b.getState())
-          .then((s) => setState(s))
-          .catch(() => {});
-      }
+      // The backend pushes a fresh dashboard after a kill; only the open drawer needs care.
+      setDetails((d) => (d && r.killed.some((k) => k.pid === d.pid && k.started_at === d.started_at) ? null : d));
     },
     [pushToast],
   );
 
-  if (!state) {
+  if (!dash) {
     return (
       <div className="splash">
         {loadError ? <span className="error">Не удалось получить данные: {loadError}</span> : "Загрузка…"}
@@ -97,30 +121,50 @@ export default function App() {
 
   return (
     <div className="app">
-      <Header system={state.system} history={state.history} takenAt={state.taken_at} />
+      <Header system={dash.system} history={dash.history} takenAt={dash.taken_at} />
       <nav className="tabs" role="tablist">
-        {TABS.map((t) => (
+        {TABS.map((t, i) => (
           <button
             key={t.id}
             role="tab"
             aria-selected={tab === t.id}
             className={tab === t.id ? "tab active" : "tab"}
             onClick={() => setTab(t.id)}
+            title={`Клавиша ${i + 1}`}
           >
             {t.label}
-            {t.id === "suspects" && state.suspects.length > 0 && <span className="count">{state.suspects.length}</span>}
+            {t.id === "suspects" && dash.suspects.length > 0 && <span className="count">{dash.suspects.length}</span>}
           </button>
         ))}
       </nav>
       <main className="content">
-        {tab === "suspects" && <SuspectsTab suspects={state.suspects} processes={state.processes} onKill={onKill} />}
+        {tab === "suspects" && <SuspectsTab suspects={dash.suspects} onKill={onKill} onOpen={onOpen} />}
         {tab === "apps" && (
-          <AppsTab groups={state.groups} processes={state.processes} total={state.system.total} now={state.taken_at} onKill={onKill} />
+          <AppsTab
+            groups={dash.groups}
+            processes={dash.processes}
+            total={dash.system.total}
+            now={dash.taken_at}
+            onKill={onKill}
+            onOpen={onOpen}
+          />
         )}
-        {tab === "procs" && <ProcessesTab processes={state.processes} now={state.taken_at} onKill={onKill} />}
+        {tab === "procs" && (
+          <ProcessesTab processes={dash.processes} now={dash.taken_at} onKill={onKill} onOpen={onOpen} focusSignal={filterFocus} />
+        )}
         {tab === "journal" && <JournalTab />}
       </main>
-      {killTarget && <KillDialog target={killTarget} onCancel={() => setKillTarget(null)} onResult={onKillResult} />}
+      {details && (
+        <DetailsDrawer
+          proc={details}
+          blocked={modalOpen}
+          onClose={closeDetails}
+          onOpen={onOpen}
+          onKill={onKill}
+          onToast={pushToast}
+        />
+      )}
+      {killReq && <KillDialog req={killReq} onCancel={() => setKillReq(null)} onResult={onKillResult} />}
       <Toasts toasts={toasts} onDismiss={dismissToast} />
     </div>
   );

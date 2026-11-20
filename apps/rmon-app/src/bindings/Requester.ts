@@ -3,4 +3,4 @@
 /**
  * Кто попросил снятие.
  */
-export type Requester = "cli" | "mcp" | "app";
+export type Requester = "cli" | "mcp" | "app" | "guard";

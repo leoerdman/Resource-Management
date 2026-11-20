@@ -1,6 +1,7 @@
 import { memo, useCallback, useMemo, useState } from "react";
-import { cmdHint, fmtAge, fmtBytes, fmtGrowth, fmtPct, plural } from "../format";
-import type { AppGroup, KillTarget, ProcessRow } from "../types";
+import { cmdHint, GENERIC_NAMES, fmtAge, fmtBytes, fmtGrowth, fmtPct, plural } from "../format";
+import type { AppGroup, ProcessRow, ProcKey } from "../types";
+import type { KillRequest } from "./KillDialog";
 import { KillButton, PolicyTag } from "./Kill";
 import { processTarget } from "./ProcessesTab";
 
@@ -9,10 +10,11 @@ interface Props {
   processes: ProcessRow[];
   total: number;
   now: number;
-  onKill: (t: KillTarget) => void;
+  onKill: (r: KillRequest) => void;
+  onOpen: (k: ProcKey) => void;
 }
 
-export const AppsTab = memo(function AppsTab({ groups, processes, total, now, onKill }: Props) {
+export const AppsTab = memo(function AppsTab({ groups, processes, total, now, onKill, onOpen }: Props) {
   const [open, setOpen] = useState<ReadonlySet<string>>(() => new Set());
 
   const sorted = useMemo(() => [...groups].sort((a, b) => b.footprint - a.footprint), [groups]);
@@ -45,6 +47,7 @@ export const AppsTab = memo(function AppsTab({ groups, processes, total, now, on
             now={now}
             onToggle={toggle}
             onKill={onKill}
+            onOpen={onOpen}
           />
         ))}
       </div>
@@ -60,10 +63,11 @@ interface RowProps {
   byPid: Map<number, ProcessRow>;
   now: number;
   onToggle: (name: string) => void;
-  onKill: (t: KillTarget) => void;
+  onKill: (r: KillRequest) => void;
+  onOpen: (k: ProcKey) => void;
 }
 
-function GroupRow({ g, total, expanded, rows, byPid, now, onToggle, onKill }: RowProps) {
+function GroupRow({ g, total, expanded, rows, byPid, now, onToggle, onKill, onOpen }: RowProps) {
   const share = total ? (g.footprint / total) * 100 : 0;
   const procs = useMemo(() => {
     if (!rows) return null;
@@ -92,11 +96,11 @@ function GroupRow({ g, total, expanded, rows, byPid, now, onToggle, onKill }: Ro
       {procs && (
         <div className="group-procs">
           {procs.map((r) => (
-            <div key={r.pid} className="gproc">
+            <div key={r.pid} className="gproc" onClick={() => onOpen(r)}>
               <span className="num dim">{r.pid}</span>
               <span className="name" title={r.args.join(" ") || r.exe || r.name}>
                 {r.name}
-                {r.app_group === r.name && <span className="dim"> {cmdHint(r.name, r.args)}</span>}
+                {GENERIC_NAMES.has(r.name) && <span className="dim"> {cmdHint(r.name, r.args)}</span>}
               </span>
               <span className="num strong">{fmtBytes(r.footprint ?? r.rss)}</span>
               <span className="num dim" title="Рост МБ/мин">

@@ -1,6 +1,6 @@
 //! Политика снятия: кого нельзя трогать никогда, кого — только с подтверждением.
 //!
-//! Правила — данные, а не код: встроенные (по ОС) ∪ `never` из `memory-guard/config.json`
+//! Правила — данные, а не код: встроенные (по ОС) ∪ `[guard] never` сторожа памяти
 //! (как «с подтверждением»: сторож не трогает их автоматически, rmon — без явного согласия)
 //! ∪ `[policy]` из `config.toml`. Добавить можно только строгость: «свободных» правил нет.
 //!
@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::config::{self, Config, RuleSpec};
+use crate::guard::never_as_policy_rules;
 use crate::model::ProcessInfo;
 use crate::platform;
 
@@ -135,75 +136,10 @@ pub fn builtin_protect() -> Vec<RuleSpec> {
     v
 }
 
-/// Встроенные «с подтверждением» для текущей ОС: приложения владельца и его агенты.
+/// Встроенные «с подтверждением», кроме «никогда» сторожа (оно добавляется отдельно):
+/// любое приложение из бандла на macOS.
 pub fn builtin_confirm() -> Vec<RuleSpec> {
-    let mut v = vec![
-        spec("сессия Claude Code", Some(r"^claude(\.exe)?$"), None, None),
-        spec("движок M Code", Some(r"^mcode(-engine)?(\.exe)?$"), None, None),
-        spec("движок M Code", None, None, Some(r"(^|/)mcode-engine(\s|$)")),
-    ];
-    if cfg!(target_os = "macos") {
-        v.extend([
-            spec("Claude и его хелперы", None, Some(r"/[Cc]laude\.app/"), None),
-            spec("M Code Desktop", None, Some(r"/M Code Desktop[^/]*\.app/"), None),
-            spec("Telegram", None, Some(r"/Telegram[^/]*\.app/"), None),
-            spec(
-                "браузер",
-                None,
-                Some(r"/(Google Chrome|Safari|Arc|Firefox|Brave Browser|Microsoft Edge|Yandex|Opera|Chromium|Orion|Zen|Dia|Comet)[^/]*\.app/"),
-                None,
-            ),
-            spec("редактор", None, Some(r"/(Visual Studio Code|Cursor|Windsurf|Zed|Xcode)[^/]*\.app/"), None),
-            spec("системная утилита", None, Some(r"^/(usr/bin|bin)/"), None),
-            spec("приложение", None, Some(r"\.app/"), None),
-        ]);
-    } else if cfg!(windows) {
-        v.extend([
-            spec("оболочка Windows", Some(r"(?i)^explorer(\.exe)?$"), None, None),
-            spec("приложение владельца", Some(r"(?i)^(chrome|msedge|firefox|brave|opera|Code|Cursor|Windsurf|Zed|Telegram|Claude)(\.exe)?$"), None, None),
-        ]);
-    } else {
-        v.extend([
-            spec(
-                "приложение владельца",
-                Some(r"^(chrome|chromium|google-chrome|firefox|brave|opera|code|cursor|windsurf|zed|telegram-desktop|Telegram|claude-desktop)$"),
-                None,
-                None,
-            ),
-            spec("системная утилита", None, Some(r"^/(usr/bin|bin)/"), None),
-        ]);
-    }
-    v
-}
-
-#[derive(Deserialize)]
-struct GuardConfig {
-    #[serde(default)]
-    never: Vec<GuardRule>,
-}
-
-#[derive(Deserialize)]
-struct GuardRule {
-    name: String,
-    exe: Option<String>,
-    path: Option<String>,
-    args: Option<String>,
-}
-
-/// `never` сторожа памяти, если он есть. Битые правила пропускаются с предупреждением.
-pub fn memory_guard_never(path: &Path) -> Vec<RuleSpec> {
-    let Ok(text) = std::fs::read_to_string(path) else { return Vec::new() };
-    match serde_json::from_str::<GuardConfig>(&text) {
-        Ok(cfg) => cfg
-            .never
-            .into_iter()
-            .map(|r| RuleSpec { name: format!("{} (memory-guard)", r.name), exe: r.exe, path: r.path, args: r.args })
-            .collect(),
-        Err(e) => {
-            eprintln!("rmon: {} не разобран: {e}", path.display());
-            Vec::new()
-        }
-    }
+    if cfg!(target_os = "macos") { vec![spec("приложение", None, Some(r"\.app/"), None)] } else { Vec::new() }
 }
 
 /// Политика снятия.
@@ -216,19 +152,17 @@ pub struct Policy {
 }
 
 impl Policy {
-    /// Только встроенные правила.
+    /// Политика с настройками по умолчанию.
     pub fn builtin() -> Self {
-        Self::from_specs(&builtin_protect(), &builtin_confirm()).0
+        Self::from_config(&Config::default()).0
     }
 
-    /// Встроенные ∪ memory-guard ∪ конфиг. Вторым — ошибки компиляции правил (правило пропущено).
+    /// Встроенные ∪ «никогда» сторожа ∪ конфиг. Вторым — ошибки компиляции (правило пропущено).
     pub fn from_config(cfg: &Config) -> (Self, Vec<String>) {
         let mut protect = builtin_protect();
         protect.extend(cfg.policy.protect.iter().cloned());
-        let mut confirm = builtin_confirm();
-        if cfg.policy.use_memory_guard {
-            confirm.extend(memory_guard_never(&config::guard_config()));
-        }
+        let mut confirm = never_as_policy_rules(&cfg.guard.never);
+        confirm.extend(builtin_confirm());
         confirm.extend(cfg.policy.confirm.iter().cloned());
         Self::from_specs(&protect, &confirm)
     }
@@ -262,7 +196,8 @@ impl Policy {
             return KillPolicy::Protected(r.name.clone());
         }
         if let Some(r) = self.confirm.iter().find(|r| r.matches(p)) {
-            let app = if p.app_group.is_empty() || p.app_group == p.name { String::new() } else { format!(": {}", p.app_group) };
+            let redundant = p.app_group.is_empty() || p.app_group == p.name || r.name.contains(&p.app_group) || p.app_group.contains(&r.name);
+            let app = if redundant { String::new() } else { format!(": {}", p.app_group) };
             return KillPolicy::Confirm(format!("{}{app}", r.name));
         }
         KillPolicy::Free
@@ -340,8 +275,6 @@ mod tests {
     fn config_only_tightens() {
         let cfg = Config::parse(
             r#"
-            [policy]
-            use_memory_guard = false
             [[policy.protect]]
             name = "мой сервер"
             args = "my-server\\.js"
@@ -358,16 +291,10 @@ mod tests {
     }
 
     #[test]
-    fn reads_memory_guard_never() {
-        let dir = std::env::temp_dir().join(format!("rmon-guard-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let file = dir.join("config.json");
-        std::fs::write(&file, r#"{"never":[{"name":"Obsidian","path":"/Obsidian\\.app/"},{"name":"битое","exe":"("}]}"#).unwrap();
-        let specs = memory_guard_never(&file);
-        assert_eq!(specs.len(), 2);
-        let (p, errors) = Policy::from_specs(&[], &specs);
-        assert_eq!(errors.len(), 1, "битое правило пропущено, остальные работают");
-        assert!(matches!(p.classify(&proc(902, "Obsidian", Some("/Applications/Obsidian.app/Contents/MacOS/Obsidian"), &[])), KillPolicy::Confirm(_)));
-        std::fs::remove_dir_all(dir).ok();
+    fn guard_never_any_field_becomes_confirm() {
+        // «движок M Code» у сторожа совпадает по exe ИЛИ по args — так же и в политике.
+        let p = Policy::builtin();
+        assert!(matches!(p.classify(&proc(910, "bun", Some("/opt/homebrew/bin/bun"), &["bun", "/x/mcode-engine"])), KillPolicy::Confirm(_)));
+        assert!(matches!(p.classify(&proc(911, "mcode-engine", Some("/opt/x/mcode-engine"), &["mcode-engine"])), KillPolicy::Confirm(_)));
     }
 }

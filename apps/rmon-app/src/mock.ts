@@ -12,8 +12,10 @@ import type {
   KillPolicy,
   Pressure,
   ProcessRow,
+  ProcBrief,
+  ProcessDetails,
   ProcState,
-  State,
+  Dashboard,
   Suspect,
   SystemMemory,
 } from "./types";
@@ -57,6 +59,7 @@ interface MockProc {
   started_at: number;
   app_group: string;
   policy: KillPolicy;
+  cwd: string | null;
 }
 
 const now0 = Math.floor(Date.now() / 1000);
@@ -82,6 +85,7 @@ function add(p: Partial<MockProc> & Pick<MockProc, "name" | "mem">): MockProc {
     started_at: now0 - Math.floor(between(600, 3 * 86400)),
     app_group: p.name,
     policy: FREE,
+    cwd: (p.uid ?? USER_UID) === USER_UID ? "/Users/x" : "/",
     ...p,
   };
   procs.push(proc);
@@ -165,12 +169,18 @@ function buildMachine() {
 
   // --- claude CLI sessions ---
   const claudeSessions: MockProc[] = [];
+  const sessionProjects = ["Resource Management", "ultra-web", "chatplace-admin", "M Code", "landing", "Hooks", "docs-site", "Resource Management"];
   for (let i = 0; i < 8; i++) {
-    claudeSessions.push(add({ name: "claude", exe: "/Users/leo/.local/bin/claude",
+    const cwd = `/Users/x/Programming - Main/${sessionProjects[i]}`;
+    const started = now0 - Math.floor(between(900, 40000));
+    const shell = add({ name: "zsh", args: ["-zsh"], mem: between(2, 6) * MB, ppid: i < 5 ? mcode.pid : code.pid, cwd,
+      started_at: started - 5, app_group: i < 5 ? "M Code Desktop" : "Visual Studio Code",
+      policy: confirm("оболочка терминала: закроется вкладка") });
+    claudeSessions.push(add({ name: "claude", exe: "/Users/x/.local/bin/claude", cwd,
       args: ["claude", ...(i % 3 === 0 ? ["--resume"] : []), ...(i === 5 ? ["--dangerously-skip-permissions"] : [])],
       mem: (i === 2 ? 2.4 * GB : between(280, 900) * MB), rate: i === 2 ? 38 * MB : between(-1, 3) * MB,
-      threads: 14, cpuBase: between(0.5, 6), app_group: "Claude Code", ppid: code.pid,
-      policy: confirm("сессия claude CLI: разговор оборвётся"), started_at: now0 - Math.floor(between(900, 40000)) }));
+      threads: 14, cpuBase: between(0.5, 6), app_group: "Claude Code", ppid: shell.pid,
+      policy: confirm("сессия claude CLI: разговор оборвётся"), started_at: started }));
   }
 
   // --- node zoo ---
@@ -180,38 +190,40 @@ function buildMachine() {
   for (const s of claudeSessions) {
     for (const m of mcpServers) {
       if (rnd() < 0.55) continue;
-      add({ name: "node", exe: "/opt/homebrew/bin/node", args: ["node", `/Users/leo/.npm/_npx/4f1c/node_modules/${m}/dist/index.js`],
-        mem: between(40, 140) * MB, ppid: s.pid, app_group: "node", cpuBase: 0.05, started_at: s.started_at + 3 });
+      add({ name: "node", exe: "/opt/homebrew/bin/node", args: ["node", `/Users/x/.npm/_npx/4f1c/node_modules/${m}/dist/index.js`],
+        mem: between(40, 140) * MB, ppid: s.pid, app_group: "node", cpuBase: 0.05, started_at: s.started_at + 3, cwd: s.cwd });
     }
   }
   // Six identical stale MCP servers from dead sessions → Duplicate + Orphan.
   for (let i = 0; i < 6; i++)
-    add({ name: "node", exe: "/opt/homebrew/bin/node", args: ["node", "/Users/leo/.npm/_npx/9a2e/node_modules/mcp-memory-bank/dist/index.js"],
-      mem: between(70, 110) * MB, ppid: 1, cpuBase: 0, started_at: now0 - Math.floor(between(20000, 90000)) });
+    add({ name: "node", exe: "/opt/homebrew/bin/node", args: ["node", "/Users/x/.npm/_npx/9a2e/node_modules/mcp-memory-bank/dist/index.js"],
+      mem: between(70, 110) * MB, ppid: 1, cpuBase: 0, started_at: now0 - Math.floor(between(20000, 90000)),
+      cwd: `/Users/x/Programming - Main/${pick(sessionProjects)}` });
 
   const projects = ["rmon-app", "landing", "ultra-web", "chatplace-admin", "mcode-ui", "docs-site"];
   for (const p of projects) {
-    add({ name: "node", exe: "/opt/homebrew/bin/node", args: ["node", `/Users/leo/Projects/${p}/node_modules/.bin/vite`],
-      mem: between(120, 420) * MB, cpuBase: 0.3, ppid: rnd() < 0.3 ? 1 : code.pid });
+    add({ name: "node", exe: "/opt/homebrew/bin/node", args: ["node", `/Users/x/Programming - Main/${p}/node_modules/.bin/vite`],
+      mem: between(120, 420) * MB, cpuBase: 0.3, ppid: rnd() < 0.3 ? 1 : code.pid, cwd: `/Users/x/Programming - Main/${p}` });
     add({ name: "node", exe: "/opt/homebrew/bin/node",
       args: ["node", "/Applications/Visual Studio Code.app/Contents/Resources/app/extensions/node_modules/typescript/lib/tsserver.js", "--project", p],
-      mem: between(300, 1300) * MB, rate: p === "ultra-web" ? 18 * MB : 0, cpuBase: 0.5, ppid: code.pid });
+      mem: between(300, 1300) * MB, rate: p === "ultra-web" ? 18 * MB : 0, cpuBase: 0.5, ppid: code.pid, cwd: `/Users/x/Programming - Main/${p}` });
   }
   // A forgotten 1.6 GB jest run with no CPU → Idle + Orphan.
-  add({ name: "node", exe: "/opt/homebrew/bin/node", args: ["node", "/Users/leo/Projects/landing/node_modules/.bin/jest", "--watch"],
-    mem: 1.6 * GB, cpuBase: 0, ppid: 1, started_at: now0 - 9 * 3600 });
+  add({ name: "node", exe: "/opt/homebrew/bin/node", args: ["node", "/Users/x/Programming - Main/landing/node_modules/.bin/jest", "--watch"],
+    mem: 1.6 * GB, cpuBase: 0, ppid: 1, started_at: now0 - 9 * 3600, cwd: "/Users/x/Programming - Main/landing" });
   for (let i = 0; i < 40; i++)
     add({ name: "node", exe: "/opt/homebrew/bin/node",
       args: ["node", pick(["eslint_d", "prettierd", "postcss-loader", "next-server", "esbuild --service", "turbo daemon", "pnpm install"])],
       mem: between(30, 260) * MB, cpuBase: between(0, 1.5), ppid: pick([code.pid, 1, claudeSessions[0].pid]) });
 
   // --- other dev tools ---
-  add({ name: "tsgo", exe: "/Users/leo/Projects/ultra-web/node_modules/.bin/tsgo", args: ["tsgo", "--build", "--watch"],
-    mem: 3.4 * GB, rate: 55 * MB, cpuBase: 85, state: "running", threads: 18, started_at: now0 - 420 });
-  add({ name: "tsgo", exe: "/Users/leo/Projects/landing/node_modules/.bin/tsgo", args: ["tsgo", "-p", "."],
+  add({ name: "tsgo", exe: "/Users/x/Programming - Main/ultra-web/node_modules/.bin/tsgo", args: ["tsgo", "--build", "--watch"],
+    mem: 3.4 * GB, rate: 55 * MB, cpuBase: 85, state: "running", threads: 18, started_at: now0 - 420,
+    cwd: "/Users/x/Programming - Main/ultra-web", ppid: claudeSessions[1].pid });
+  add({ name: "tsgo", exe: "/Users/x/Programming - Main/landing/node_modules/.bin/tsgo", args: ["tsgo", "-p", "."],
     mem: 720 * MB, cpuBase: 40, state: "running", started_at: now0 - 95 });
   for (let i = 0; i < 6; i++)
-    add({ name: "bun", exe: "/Users/leo/.bun/bin/bun", args: ["bun", pick(["run dev", "test --watch", "x mcp-proxy"])],
+    add({ name: "bun", exe: "/Users/x/.bun/bin/bun", args: ["bun", pick(["run dev", "test --watch", "x mcp-proxy"])],
       mem: between(60, 480) * MB, cpuBase: between(0, 2), ppid: i === 0 ? 1 : code.pid });
   for (let i = 0; i < 4; i++)
     add({ name: "python3", exe: "/opt/homebrew/bin/python3", args: ["python3", pick(["-m http.server", "train.py", "notebook.py", "-m uvicorn app:app"])],
@@ -298,10 +310,19 @@ function toRow(p: MockProc, now: number): ProcessRow {
 }
 
 const DEV = new Set(["node", "bun", "python3", "tsgo", "claude", "cargo", "rustc", "esbuild"]);
+const cmdOf = (r: { args: string[]; exe: string | null; name: string }) =>
+  (r.args.length ? r.args.join(" ") : r.exe ?? r.name).slice(0, 200);
 
 function analyze(rows: ProcessRow[], now: number): Suspect[] {
   const out: Suspect[] = [];
-  const base = (r: ProcessRow) => ({ pid: r.pid, name: r.name, app_group: r.app_group, started_at: r.started_at, policy: r.policy });
+  // Abandoned copies of one command (orphans with the same command line) share a group key.
+  const orphanCount = new Map<string, number>();
+  for (const r of rows) if (r.ppid === 1 && DEV.has(r.name)) orphanCount.set(cmdOf(r), (orphanCount.get(cmdOf(r)) ?? 0) + 1);
+  const base = (r: ProcessRow) => {
+    const cmd = cmdOf(r);
+    return { pid: r.pid, name: r.name, app_group: r.app_group, started_at: r.started_at, policy: r.policy, cmd,
+      group: r.ppid === 1 && (orphanCount.get(cmd) ?? 0) >= 2 ? `copies:${cmd}` : null };
+  };
   const dupes = new Map<string, ProcessRow[]>();
   for (const r of rows) {
     const mem = r.footprint ?? r.rss;
@@ -355,9 +376,7 @@ function groupsOf(rows: ProcessRow[]): AppGroup[] {
   return [...m.values()].sort((a, b) => b.footprint - a.footprint);
 }
 
-let current: State;
-
-function makeState(now: number): State {
+function makeDashboard(now: number): Dashboard {
   const s = systemAt(now);
   counters = {
     pageins: counters.pageins + Math.floor(between(50, 900)),
@@ -380,7 +399,7 @@ function makeState(now: number): State {
   };
 }
 
-current = makeState(now0);
+let current: Dashboard = makeDashboard(now0);
 
 const journal: JournalEntry[] = [
   { source: "rmon", ts: now0 - 640, text: "app: снят node (48120) SIGTERM, освобождено 1,2 ГБ — «зависший vite»", raw: { requested_by: "app", pid: 48120 } },
@@ -390,23 +409,83 @@ const journal: JournalEntry[] = [
   { source: "memory-guard", ts: null, text: "сторож запущен (интервал 10 с)", raw: { event: "start" } },
 ];
 
-const listeners = new Set<(s: State) => void>();
+const listeners = new Set<(d: Dashboard) => void>();
 let timer: ReturnType<typeof setInterval> | null = null;
+
+function publish() {
+  for (const l of listeners) l(current);
+}
 
 function ensureTimer() {
   if (timer) return;
   timer = setInterval(() => {
     const now = Math.floor(Date.now() / 1000);
     tickProcs(now);
-    current = makeState(now);
-    for (const l of listeners) l(current);
+    current = makeDashboard(now);
+    publish();
   }, TICK_S * 1000);
 }
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+const brief = (p: MockProc): ProcBrief => ({
+  pid: p.pid,
+  name: p.name,
+  started_at: p.started_at,
+  reclaim: Math.round(p.mem),
+  cmd: cmdOf(p).slice(0, 120),
+});
+
+async function details(pid: number, startedAt: number): Promise<ProcessDetails> {
+  await delay(120);
+  const byPid = new Map(procs.map((p) => [p.pid, p]));
+  const p = byPid.get(pid);
+  if (!p || p.started_at !== startedAt) throw `процесса ${pid} уже нет`;
+  const now = Math.floor(Date.now() / 1000);
+  const row = current.processes.find((r) => r.pid === pid) ?? toRow(p, now);
+
+  const ancestors: ProcBrief[] = [];
+  for (let q = byPid.get(p.ppid); q && ancestors.length < 20; q = q.pid === q.ppid ? undefined : byPid.get(q.ppid)) {
+    ancestors.push(brief(q));
+    if (q.pid <= 1) break;
+  }
+  const children = new Map<number, MockProc[]>();
+  for (const q of procs) {
+    const list = children.get(q.ppid);
+    if (list) list.push(q);
+    else children.set(q.ppid, [q]);
+  }
+  const descendants: ProcBrief[] = [];
+  const queue = pid > 1 ? [pid] : [];
+  while (queue.length && descendants.length < 200) {
+    for (const c of children.get(queue.shift()!) ?? []) {
+      if (c.pid === pid) continue;
+      descendants.push(brief(c));
+      queue.push(c.pid);
+    }
+  }
+  // Memory series: the last ≤15 min every 10 s, drifting back along the process's rate.
+  const series: [number, number][] = [];
+  const from = Math.max(p.started_at, now - HISTORY_S);
+  for (let t = from - (from % 10); t <= now; t += 10) {
+    if (t < p.started_at) continue;
+    const back = ((now - t) / 60) * p.rate;
+    const wobble = Math.sin(t / 37 + pid) * 3 * MB + Math.sin(t / 11) * MB;
+    series.push([t, Math.max(MB, Math.round(p.mem - back + wobble))]);
+  }
+  return {
+    row,
+    command_line: p.args.length ? p.args.join(" ") : p.exe ?? p.name,
+    cwd: p.uid === USER_UID ? p.cwd : null,
+    ancestors,
+    descendants,
+    descendants_total: descendants.reduce((a, d) => a + d.reclaim, 0),
+    series,
+  };
+}
+
 async function kill(a: KillArgs): Promise<KillOutcome> {
-  await delay(500);
+  await delay(400);
   const i = procs.findIndex((p) => p.pid === a.pid);
   const p = procs[i];
   if (!p || p.started_at !== a.startedAt) throw "Процесс уже завершился или pid занят другим процессом — снимок устарел";
@@ -414,9 +493,10 @@ async function kill(a: KillArgs): Promise<KillOutcome> {
   if (p.policy.kind === "confirm" && !a.confirm) throw `Нужно явное подтверждение: ${p.policy.reason}`;
   const reclaimed = Math.round(p.mem);
   procs.splice(i, 1);
-  // Reflect the kill immediately, as the real backend's next snapshot would.
+  // Like the real backend: push a fresh dashboard right after the kill.
   const processes = current.processes.filter((r) => r.pid !== p.pid);
   current = { ...current, processes, groups: groupsOf(processes), suspects: current.suspects.filter((s) => s.pid !== p.pid) };
+  setTimeout(publish, 0);
   const message = `${p.name} (${p.pid}) снят SIGTERM, освобождено ${fmtBytes(reclaimed)}`;
   journal.unshift({ source: "rmon", ts: Math.floor(Date.now() / 1000), text: `app: ${message} — «${a.reason}»`, raw: { requested_by: "app", ...a } });
   return { pid: p.pid, name: p.name, signal: "SIGTERM", exited: true, reclaimed, dry_run: false, message };
@@ -424,10 +504,10 @@ async function kill(a: KillArgs): Promise<KillOutcome> {
 
 export function createMockBackend(): Backend {
   return {
-    getState: async () => current,
-    onState: async (cb) => {
+    subscribe: async (cb) => {
       listeners.add(cb);
       ensureTimer();
+      setTimeout(() => listeners.has(cb) && cb(current), 0);
       return () => {
         listeners.delete(cb);
         if (!listeners.size && timer) {
@@ -436,6 +516,7 @@ export function createMockBackend(): Backend {
         }
       };
     },
+    details,
     kill,
     readJournal: async () => {
       await delay(150);
@@ -443,3 +524,7 @@ export function createMockBackend(): Backend {
     },
   };
 }
+
+// Dev only: a re-executed mock would be a second fake machine next to the first (other pids,
+// other start times). Reload the page instead of hot-swapping it.
+if (import.meta.hot) import.meta.hot.accept(() => location.reload());

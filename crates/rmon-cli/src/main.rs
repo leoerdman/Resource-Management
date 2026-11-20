@@ -11,6 +11,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use rmon_core::analyze::{Suspect, app_groups};
 use rmon_core::config::{self, Config};
+use rmon_core::guard::{self, GuardMode};
 use rmon_core::fmt::{bytes, bytes_per_min, duration_human, percent};
 use rmon_core::kill::{KillRequest, Requester};
 use rmon_core::monitor::{Monitor, MonitorConfig, ProcessRow, Tick};
@@ -90,8 +91,37 @@ enum Cmd {
         #[arg(long, default_value = "")]
         reason: String,
     },
-    /// Настройки: где лежат, что действует, какие правила политики не разобрались.
+    /// Настройки: где лежат, что действует, какие правила не разобрались.
     Config,
+    /// Сторож памяти: в красной зоне сам снимает самый большой прогон.
+    Guard {
+        #[command(subcommand)]
+        action: Option<GuardCmd>,
+    },
+    /// MCP-сервер для Claude Code (stdio).
+    Mcp,
+}
+
+#[derive(Subcommand)]
+enum GuardCmd {
+    /// Режим, старый сторож, кто держит сторожа, последние события (по умолчанию).
+    Status,
+    /// Проба: зона сейчас и кого бы снял — ничего не трогает.
+    Now,
+    /// Включить сторожа (боевой режим).
+    On,
+    /// Выключить сторожа.
+    Off,
+    /// Режим пробы: только «убил бы».
+    Dry,
+    /// Боевой режим.
+    Arm,
+    /// Сторожить без окна (для LaunchAgent/терминала); события — в stdout.
+    Run,
+    /// Перенести обязанность старого LaunchAgent memory-guard в rmon (обратимо).
+    Retire,
+    /// Вернуть старый memory-guard.
+    Restore,
 }
 
 fn main() -> ExitCode {
@@ -124,6 +154,8 @@ fn run(cli: Cli, paint: Paint) -> Result<()> {
         Cmd::Why { pid } => why(json, pid, paint),
         Cmd::Kill { pid, confirm, hard, dry_run, reason } => kill(json, pid, confirm, hard, dry_run, reason),
         Cmd::Config => show_config(json),
+        Cmd::Guard { action } => guard_cmd(json, action.unwrap_or(GuardCmd::Status), paint),
+        Cmd::Mcp => rmon_mcp::serve(),
     }
 }
 
@@ -356,15 +388,18 @@ fn kill(json: bool, pid: i32, confirm: bool, hard: bool, dry_run: bool, reason: 
 fn show_config(json: bool) -> Result<()> {
     let path = config::config_file();
     let cfg = Config::load().with_context(|| format!("настройки {}", path.display()))?;
-    let (_, errors) = Policy::from_config(&cfg);
+    let (_, mut errors) = Policy::from_config(&cfg);
+    if let Err(e) = guard::Rules::compile(&cfg.guard) {
+        errors.push(e);
+    }
     if json {
         #[derive(Serialize)]
         struct Out<'a> {
             config_file: String,
             exists: bool,
             actions_log: String,
-            guard_log: String,
-            guard_config: String,
+            guard_events: String,
+            legacy_guard_log: String,
             config: &'a Config,
             rule_errors: &'a [String],
         }
@@ -372,24 +407,125 @@ fn show_config(json: bool) -> Result<()> {
             config_file: path.display().to_string(),
             exists: path.exists(),
             actions_log: config::actions_log().display().to_string(),
-            guard_log: config::guard_log().display().to_string(),
-            guard_config: config::guard_config().display().to_string(),
+            guard_events: guard::runner::events_log().display().to_string(),
+            legacy_guard_log: config::legacy_guard_log().display().to_string(),
             config: &cfg,
             rule_errors: &errors,
         });
     }
     println!("файл настроек  {}{}", path.display(), if path.exists() { "" } else { " (нет — действуют значения по умолчанию)" });
     println!("журнал         {}", config::actions_log().display());
-    println!("memory-guard   {} (правила never: {})", config::guard_log().display(), config::guard_config().display());
+    println!("сторож         {}", guard::runner::events_log().display());
     println!("\n{}", toml::to_string_pretty(&cfg)?);
     if errors.is_empty() {
-        println!("правила политики: все разобраны");
+        println!("правила политики и сторожа: все разобраны");
         Ok(())
     } else {
         for e in &errors {
             eprintln!("правило пропущено: {e}");
         }
-        bail!("{} правил(а) политики не разобрано", errors.len())
+        bail!("{} правил(а) не разобрано", errors.len())
+    }
+}
+
+fn guard_cmd(json: bool, action: GuardCmd, paint: Paint) -> Result<()> {
+    use guard::runner::{persist_flags, read_events};
+    match action {
+        GuardCmd::On | GuardCmd::Arm => persist_flags(Some(true), Some(false), None).map_err(anyhow::Error::msg)?,
+        GuardCmd::Off => persist_flags(Some(false), None, None).map_err(anyhow::Error::msg)?,
+        GuardCmd::Dry => persist_flags(Some(true), Some(true), None).map_err(anyhow::Error::msg)?,
+        GuardCmd::Retire => {
+            let s = guard::legacy::retire().map_err(anyhow::Error::msg)?;
+            println!("старый memory-guard: {s:?}; обязанность сторожа — у rmon");
+            return Ok(());
+        }
+        GuardCmd::Restore => {
+            let s = guard::legacy::restore().map_err(anyhow::Error::msg)?;
+            println!("старый memory-guard: {s:?}");
+            return Ok(());
+        }
+        GuardCmd::Now => return guard_now(json, paint),
+        GuardCmd::Run => return guard_run(json),
+        GuardCmd::Status => {}
+    }
+    let cfg = Config::load()?;
+    let legacy = guard::legacy::status();
+    let holder = std::fs::read_to_string(config::log_dir().join("guard.lock")).unwrap_or_default();
+    let events = read_events(10);
+    if json {
+        return print_json(&serde_json::json!({
+            "config": cfg.guard, "legacy": legacy, "lock_holder": holder.trim(), "recent": events,
+        }));
+    }
+    let g = &cfg.guard;
+    let mode = if !g.enabled { "выключен" } else if g.dry_run { "проба (только «убил бы»)" } else { "боевой" };
+    println!("Сторож памяти: {}", paint.bold(mode));
+    println!(
+        "  красная зона: давление ≥ {}, или доступно ≤ {} %, или давление ≥ {} и своп ≥ {}; держится {} с",
+        g.red.pressure_level, g.red.min_available_pct, g.red.swap_red_from_level, bytes(g.red.swap_red_mb * 1024 * 1024), g.sustain_secs
+    );
+    println!("  жертва ≥ {}, пауза после снятия {} с, уведомления: {}", bytes(g.min_victim_mb * 1024 * 1024), g.after_kill_secs, if g.notify { "да" } else { "нет" });
+    println!("  старый memory-guard: {legacy:?}");
+    if !holder.trim().is_empty() {
+        println!("  держит сторожа: pid {}", holder.trim());
+    }
+    println!("\n{}", paint.bold("Последние события"));
+    for e in events {
+        println!("  {}  {}", e.ts, e.text());
+    }
+    Ok(())
+}
+
+fn guard_now(json: bool, paint: Paint) -> Result<()> {
+    let cfg = Config::load()?;
+    let rules = guard::Rules::compile(&cfg.guard).map_err(anyhow::Error::msg)?;
+    let mut m = Monitor::new(MonitorConfig::default())?;
+    let t = m.tick()?;
+    let (zone, why) = guard::judge_zone(&t.snapshot.system, &cfg.guard.red);
+    let exclude = guard::self_and_ancestors(&t.snapshot, std::process::id() as i32);
+    let (candidates, rejected) = guard::rank_victims(&t.snapshot, &rules, &exclude);
+    if json {
+        return print_json(&serde_json::json!({ "zone": zone, "why": why, "candidates": candidates, "rejected": rejected }));
+    }
+    println!("Зона: {} ({why})", paint.bold(&format!("{zone:?}")));
+    println!("\nКандидаты (порог {}):", bytes(cfg.guard.min_victim_mb * 1024 * 1024));
+    if candidates.is_empty() {
+        println!("  нет");
+    }
+    for c in candidates.iter().take(8) {
+        println!("  {:>7}  {:<7} {:>9}  {}", c.pid, c.kind, bytes(c.mem), c.cmd);
+    }
+    println!("\nКрупные, но не тронет:");
+    for r in rejected.iter().take(12) {
+        println!("  {:>7}  {:<24} {:>9}  {}", r.pid, r.name.chars().take(24).collect::<String>(), bytes(r.mem), r.why);
+    }
+    if let Some(v) = candidates.first() {
+        let mut platform = rmon_core::platform::current()?;
+        let a = guard::author::gather(&t.snapshot, v.pid, platform.as_mut());
+        println!("\nВ красной зоне снял бы: {} {} — {}", v.kind, bytes(v.mem), guard::author::describe(&a));
+    }
+    Ok(())
+}
+
+fn guard_run(json: bool) -> Result<()> {
+    let cfg = MonitorConfig { tick: Duration::from_secs(3), analyze_every: 20, ..MonitorConfig::default() };
+    let handle = rmon_core::monitor::spawn_guarded(cfg, |_| {}, move |ev| {
+        if json {
+            if let Ok(line) = serde_json::to_string(ev) {
+                println!("{line}");
+            }
+        } else {
+            println!("{}", ev.text());
+        }
+    })?;
+    eprintln!("сторож без окна запущен; Ctrl-C — выход");
+    loop {
+        std::thread::sleep(Duration::from_secs(60));
+        if let Some(g) = handle.guard()
+            && let GuardMode::Broken(why) = g.status().mode
+        {
+            bail!("сторож остановлен: {why}");
+        }
     }
 }
 

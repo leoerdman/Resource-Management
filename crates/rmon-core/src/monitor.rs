@@ -14,10 +14,11 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::analyze::{Suspect, Thresholds, analyze, app_groups, growth_rates, short_cmd};
+use crate::analyze::{Suspect, Thresholds, analyze, app_groups, growth_rates, is_dev, short_cmd};
 use crate::collect::Collector;
 use crate::config;
 use crate::error::{Error, Result};
+use crate::guard::runner::{self, GuardEvent, GuardHandle};
 use crate::history::History;
 use crate::kill::{KillOutcome, KillRequest, kill};
 use crate::model::{AppGroup, Pressure, ProcState, ProcessInfo, Snapshot, SystemMemory};
@@ -76,6 +77,9 @@ pub struct ProcessRow {
     pub started_at: u64,
     /// Приложение.
     pub app_group: String,
+    /// Рабочий каталог — только у dev-процессов (`node`, `claude`, `bun`…), чтобы отличать
+    /// десяток одинаковых сессий прямо в списке; у прочих `None` (лишние системные вызовы).
+    pub cwd: Option<String>,
     /// Рост памяти, байт/мин (по истории анализа).
     pub growth_per_min: Option<f64>,
     /// Политика снятия.
@@ -186,6 +190,8 @@ pub struct Monitor {
     chart: VecDeque<HistoryPoint>,
     suspects: Vec<Suspect>,
     growth: HashMap<(i32, u64), f64>,
+    /// Каталоги dev-процессов по личности: читаются один раз за жизнь процесса.
+    cwds: HashMap<(i32, u64), Option<String>>,
     ticks: u64,
 }
 
@@ -204,6 +210,7 @@ impl Monitor {
             chart: VecDeque::new(),
             suspects: Vec::new(),
             growth: HashMap::new(),
+            cwds: HashMap::new(),
             ticks: 0,
         }
     }
@@ -224,12 +231,13 @@ impl Monitor {
             self.chart.pop_front();
         }
         // В первом снимке нет CPU — анализ начинается со второго.
-        let analyzed = self.ticks >= 2 && (self.ticks - 2) % u64::from(self.cfg.analyze_every.max(1)) == 0;
+        let analyzed = self.ticks >= 2 && (self.ticks - 2).is_multiple_of(u64::from(self.cfg.analyze_every.max(1)));
         if analyzed {
             self.history.push(snap.clone());
             self.suspects = analyze(&self.history, &self.cfg.thresholds);
             self.growth = growth_rates(&self.history);
         }
+        self.refresh_cwds(&snap);
         let dashboard = Dashboard {
             taken_at: snap.taken_at,
             system: snap.system,
@@ -239,6 +247,18 @@ impl Monitor {
             suspects: self.suspects.clone(),
         };
         Ok(Tick { dashboard, snapshot: snap, analyzed })
+    }
+
+    fn refresh_cwds(&mut self, snap: &Snapshot) {
+        let alive: std::collections::HashSet<(i32, u64)> = snap.processes.iter().map(|p| (p.pid, p.started_at)).collect();
+        self.cwds.retain(|k, _| alive.contains(k));
+        for p in snap.processes.iter().filter(|p| is_dev(&p.name)) {
+            let key = (p.pid, p.started_at);
+            if !self.cwds.contains_key(&key) {
+                let cwd = self.collector.cwd(p.pid).ok().flatten();
+                self.cwds.insert(key, cwd);
+            }
+        }
     }
 
     fn row(&self, p: &ProcessInfo) -> ProcessRow {
@@ -256,6 +276,7 @@ impl Monitor {
             state: p.state,
             started_at: p.started_at,
             app_group: p.app_group.clone(),
+            cwd: self.cwds.get(&(p.pid, p.started_at)).cloned().flatten(),
             growth_per_min: self.growth.get(&(p.pid, p.started_at)).copied(),
             policy: policy_for(p),
         }
@@ -387,9 +408,15 @@ type Listener = Box<dyn Fn(&Arc<Dashboard>) + Send + Sync>;
 pub struct MonitorHandle {
     published: Arc<RwLock<Published>>,
     listener: Arc<Listener>,
+    guard: Option<GuardHandle>,
 }
 
 impl MonitorHandle {
+    /// Сторож памяти, если монитор запущен с ним ([`spawn_guarded`]).
+    pub fn guard(&self) -> Option<&GuardHandle> {
+        self.guard.as_ref()
+    }
+
     /// Последняя сводка (нет — первый снимок ещё не готов).
     pub fn dashboard(&self) -> Option<Arc<Dashboard>> {
         self.published.read().unwrap_or_else(|e| e.into_inner()).dashboard.clone()
@@ -429,7 +456,20 @@ impl MonitorHandle {
     /// Снять процесс через защитный слой. Цель ищется в последнем снимке (и сверяется ядром
     /// заново перед сигналом); при успехе сводка сразу обновляется и уходит слушателю.
     pub fn kill(&self, pid: i32, started_at: Option<u64>, req: KillRequest) -> Result<KillOutcome> {
-        let target = self.target(pid, started_at).ok_or(Error::ProcessGone { pid })?;
+        // Процесс моложе последнего снимка — читаем его заново; отказ политики всё равно
+        // пройдёт через защитный слой и попадёт в журнал действий.
+        let target = match self.target(pid, started_at) {
+            Some(t) => t,
+            None => {
+                let fresh = crate::platform::current()?.process(pid)?.ok_or(Error::ProcessGone { pid })?;
+                if let Some(expected) = started_at
+                    && expected != fresh.started_at
+                {
+                    return Err(Error::IdentityMismatch { pid, expected, actual: fresh.started_at });
+                }
+                fresh
+            }
+        };
         let outcome = kill(&target, req)?;
         if outcome.exited {
             let updated = {
@@ -450,8 +490,24 @@ impl MonitorHandle {
 /// Запустить монитор в фоновом потоке. `on_update` вызывается после каждого снимка
 /// и после каждого успешного снятия — из фонового потока.
 pub fn spawn(cfg: MonitorConfig, on_update: impl Fn(&Arc<Dashboard>) + Send + Sync + 'static) -> Result<MonitorHandle> {
+    start(cfg, Arc::new(Box::new(on_update) as Listener), None)
+}
+
+/// То же вместе со сторожем памяти: каждый снимок уходит и ему. Сторож — один на машину
+/// (файловая блокировка), так что запускать так можно только долгоживущий процесс,
+/// который и должен сторожить: окно или `rmon guard run`.
+pub fn spawn_guarded(
+    cfg: MonitorConfig,
+    on_update: impl Fn(&Arc<Dashboard>) + Send + Sync + 'static,
+    on_guard: impl Fn(&GuardEvent) + Send + Sync + 'static,
+) -> Result<MonitorHandle> {
+    let guard = runner::spawn(on_guard)?;
+    start(cfg, Arc::new(Box::new(on_update) as Listener), Some(guard))
+}
+
+fn start(cfg: MonitorConfig, listener: Arc<Listener>, guard: Option<GuardHandle>) -> Result<MonitorHandle> {
     let mut monitor = Monitor::new(cfg)?;
-    let handle = MonitorHandle { published: Arc::default(), listener: Arc::new(Box::new(on_update)) };
+    let handle = MonitorHandle { published: Arc::default(), listener, guard };
     let worker = handle.clone();
     std::thread::Builder::new()
         .name("rmon-monitor".into())
@@ -461,6 +517,7 @@ pub fn spawn(cfg: MonitorConfig, on_update: impl Fn(&Arc<Dashboard>) + Send + Sy
                 match monitor.tick() {
                     Ok(Tick { dashboard, snapshot, analyzed }) => {
                         let dashboard = Arc::new(dashboard);
+                        let snapshot = Arc::new(snapshot);
                         let series = analyzed.then(|| Arc::new(monitor.history().all_series()));
                         {
                             let mut published = worker.published.write().unwrap_or_else(|e| e.into_inner());
@@ -468,7 +525,10 @@ pub fn spawn(cfg: MonitorConfig, on_update: impl Fn(&Arc<Dashboard>) + Send + Sy
                                 published.series = series;
                             }
                             published.dashboard = Some(dashboard.clone());
-                            published.snapshot = Some(Arc::new(snapshot));
+                            published.snapshot = Some(snapshot.clone());
+                        }
+                        if let Some(g) = &worker.guard {
+                            g.feed(snapshot);
                         }
                         (worker.listener)(&dashboard);
                     }

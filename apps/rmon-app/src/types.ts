@@ -1,114 +1,29 @@
-// Backend contract (mirrors rmon-core serde output). Sizes are bytes, times are unix seconds.
+// Backend contract: generated from Rust by ts-rs into ./bindings (do not edit those by hand).
+// Sizes are bytes, times are unix seconds.
 
-export type Pressure = "normal" | "warning" | "critical";
-export type ProcState = "running" | "sleeping" | "stopped" | "zombie" | "unknown";
+export type { AppGroup } from "./bindings/AppGroup";
+export type { Dashboard } from "./bindings/Dashboard";
+export type { HistoryPoint } from "./bindings/HistoryPoint";
+export type { JournalEntry } from "./bindings/JournalEntry";
+export type { JournalSource } from "./bindings/JournalSource";
+export type { KillOutcome } from "./bindings/KillOutcome";
+export type { KillPolicy } from "./bindings/KillPolicy";
+export type { Pressure } from "./bindings/Pressure";
+export type { ProcBrief } from "./bindings/ProcBrief";
+export type { ProcessDetails } from "./bindings/ProcessDetails";
+export type { ProcessRow } from "./bindings/ProcessRow";
+export type { ProcState } from "./bindings/ProcState";
+export type { Signal } from "./bindings/Signal";
+export type { Suspect } from "./bindings/Suspect";
+export type { SuspectKind } from "./bindings/SuspectKind";
+export type { SystemMemory } from "./bindings/SystemMemory";
+export type { VmCounters } from "./bindings/VmCounters";
 
-export type KillPolicy =
-  | { kind: "protected"; reason: string }
-  | { kind: "confirm"; reason: string }
-  | { kind: "free" };
+import type { KillPolicy } from "./bindings/KillPolicy";
 
-export interface VmCounters {
-  pageins: number;
-  pageouts: number;
-  swapins: number;
-  swapouts: number;
-  compressions: number;
-  decompressions: number;
-}
+// ---- UI-only types ----
 
-export interface SystemMemory {
-  total: number;
-  used: number;
-  app: number;
-  wired: number;
-  compressed: number;
-  cached_files: number;
-  free: number;
-  swap_total: number;
-  swap_used: number;
-  pressure: Pressure;
-  available_pct: number;
-  counters: VmCounters;
-}
-
-export interface ProcessRow {
-  pid: number;
-  ppid: number;
-  name: string;
-  exe: string | null;
-  args: string[];
-  uid: number;
-  footprint: number | null;
-  rss: number;
-  cpu_pct: number;
-  threads: number;
-  state: ProcState;
-  started_at: number;
-  app_group: string;
-  /** bytes per minute, from history; null while there is not enough history */
-  growth_per_min: number | null;
-  policy: KillPolicy;
-}
-
-export interface AppGroup {
-  name: string;
-  pids: number[];
-  footprint: number;
-  count: number;
-}
-
-export type SuspectKind = "hog" | "growing" | "orphan" | "idle" | "duplicate" | "zombie";
-
-export interface Suspect {
-  pid: number;
-  name: string;
-  app_group: string;
-  started_at: number;
-  kind: SuspectKind;
-  /** 0–100 */
-  score: number;
-  /** Russian, human-readable */
-  reason: string;
-  reclaim: number;
-  policy: KillPolicy;
-}
-
-export interface HistoryPoint {
-  t: number;
-  used: number;
-  swap_used: number;
-  compressed: number;
-  pressure: Pressure;
-}
-
-export interface State {
-  taken_at: number;
-  system: SystemMemory;
-  /** up to 15 min */
-  history: HistoryPoint[];
-  groups: AppGroup[];
-  processes: ProcessRow[];
-  suspects: Suspect[];
-}
-
-export interface KillOutcome {
-  pid: number;
-  name: string;
-  signal: "SIGTERM" | "SIGKILL";
-  exited: boolean;
-  reclaimed: number;
-  dry_run: boolean;
-  message: string;
-}
-
-export interface JournalEntry {
-  source: "rmon" | "memory-guard";
-  ts: number | null;
-  text: string;
-  raw: unknown;
-}
-
+/** Arguments of the `kill_process` command (Tauri maps camelCase to snake_case). */
 export interface KillArgs {
   pid: number;
   startedAt: number;
@@ -126,4 +41,10 @@ export interface KillTarget {
   reclaim: number;
   /** Text recorded in the action log as the reason. */
   reason: string;
+}
+
+/** Identity of a process: pid alone is reused, (pid, started_at) is not. */
+export interface ProcKey {
+  pid: number;
+  started_at: number;
 }

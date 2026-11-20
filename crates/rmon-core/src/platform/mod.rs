@@ -66,6 +66,12 @@ pub trait Platform: Send {
     /// Жив ли процесс (EPERM — жив, просто не наш).
     fn alive(&mut self, pid: i32) -> Result<bool>;
 
+    /// Переменные окружения процесса — только перечисленные ключи (в окружении лежат
+    /// токены; остальные ключи не выходят из платформенного слоя). Пусто, если нет прав.
+    fn env(&mut self, _pid: i32, _keys: &[&str]) -> Result<Vec<(String, String)>> {
+        Ok(Vec::new())
+    }
+
     /// Рабочий каталог процесса; `None`, если нет прав или ОС не отдаёт.
     fn cwd(&mut self, _pid: i32) -> Result<Option<String>> {
         Ok(None)

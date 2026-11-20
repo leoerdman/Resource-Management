@@ -5,7 +5,7 @@ members = ["crates/rmon-core", "crates/rmon-cli", "apps/rmon-app/src-tauri"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.89"
 publish = false
 
 [workspace.dependencies]
@@ -17,6 +17,7 @@ anyhow = "1"
 clap = { version = "4", features = ["derive", "wrap_help"] }
 regex-lite = "0.1"
 toml = "1"
+toml_edit = "0.25"
 ts-rs = { version = "12", features = ["serde-json-impl"] }
 
 [profile.release]

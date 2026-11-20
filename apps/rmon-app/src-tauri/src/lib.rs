@@ -1,174 +1,89 @@
-//! Resource Monitor: поток сбора → состояние → окно (React) и значок в строке меню.
+//! Resource Monitor: склейка [`rmon_core::monitor`] с Tauri — окно (React) и значок в строке меню.
 //!
-//! Всё платформенное — в `rmon-core`; здесь только склейка с Tauri, поэтому крейт
-//! собирается под macOS, Windows и Linux одинаково.
+//! Сбор, анализ, политика и снятие — в `rmon-core`; здесь только доставка:
+//! - сводка уходит в окно через [`Channel`] (большие сообщения Tauri передаёт через свой
+//!   протокол, а не `eval` строки в WebView), и только пока окно видно;
+//! - значок обновляется, лишь когда изменилось то, что на нём видно: пересоздавать меню
+//!   и картинку каждые 2 с — верный способ накопить память в AppKit.
 
-use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use rmon_core::analyze::{Suspect, Thresholds, analyze, app_groups, growth_rates};
-use rmon_core::collect::Collector;
+use rmon_core::analyze::Suspect;
 use rmon_core::fmt;
-use rmon_core::history::History;
 use rmon_core::journal::{self, JournalEntry};
-use rmon_core::kill::{KillOutcome, KillPolicy, KillRequest, Requester, kill, policy_for};
-use rmon_core::{AppGroup, Pressure, ProcState, ProcessInfo, SystemMemory};
-use serde::Serialize;
+use rmon_core::kill::{KillOutcome, KillRequest, Requester};
+use rmon_core::monitor::{self, Dashboard, MonitorConfig, MonitorHandle, ProcessDetails};
+use rmon_core::Pressure;
 use tauri::image::Image;
+use tauri::ipc::Channel;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Emitter, Manager, RunEvent, WindowEvent};
+use tauri::{AppHandle, Manager, RunEvent, WindowEvent};
 
-/// Шаг сбора.
-const TICK: Duration = Duration::from_secs(2);
-/// Каждый какой снимок идёт в историю анализа (10 с).
-const ANALYZE_EVERY: u32 = 5;
-/// Окно графика.
-const CHART_WINDOW: u64 = 15 * 60;
-/// Окно анализа.
-const ANALYZE_WINDOW: Duration = Duration::from_secs(10 * 60);
-/// Аргументы процесса в окно — не длиннее (экономим память webview и IPC).
-const ARGS_LIMIT: usize = 400;
+/// Сколько подозреваемых в меню значка.
+const TRAY_SUSPECTS: usize = 5;
+/// Длина строки подозреваемого в меню.
+const TRAY_LINE: usize = 80;
 
-#[derive(Debug, Clone, Serialize)]
-struct HistoryPoint {
-    t: u64,
-    used: u64,
-    swap_used: u64,
-    compressed: u64,
-    pressure: Pressure,
+/// То, что видно на значке. Сравниваем с прошлым, чтобы не трогать AppKit зря.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+struct TrayView {
+    pressure: Option<Pressure>,
+    title: String,
+    tooltip: String,
+    lines: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
-struct ProcessRow {
-    pid: i32,
-    ppid: i32,
-    name: String,
-    exe: Option<String>,
-    args: Vec<String>,
-    uid: u32,
-    footprint: Option<u64>,
-    rss: u64,
-    cpu_pct: f32,
-    threads: u32,
-    state: ProcState,
-    started_at: u64,
-    app_group: String,
-    growth_per_min: Option<f64>,
-    policy: KillPolicy,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct State {
-    taken_at: u64,
-    system: SystemMemory,
-    history: Vec<HistoryPoint>,
-    groups: Vec<AppGroup>,
-    processes: Vec<ProcessRow>,
-    suspects: Vec<Suspect>,
-}
-
-#[derive(Default)]
-struct Shared {
-    state: Mutex<Option<State>>,
-    /// Полные сведения последнего снимка — цель для снятия.
-    procs: Mutex<Vec<ProcessInfo>>,
-}
-
-type SharedState = Arc<Shared>;
-
-fn short_args(args: &[String]) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut len = 0;
-    for a in args {
-        if len >= ARGS_LIMIT {
-            out.push("…".to_string());
-            break;
+impl TrayView {
+    fn of(d: &Dashboard) -> Self {
+        let title = fmt::bytes(d.system.used);
+        Self {
+            pressure: Some(d.system.pressure),
+            tooltip: format!("Давление {} · занято {} · своп {}", d.system.pressure.as_str(), title, fmt::bytes(d.system.swap_used)),
+            title,
+            lines: d.suspects.iter().take(TRAY_SUSPECTS).map(tray_line).collect(),
         }
-        let take: String = a.chars().take(ARGS_LIMIT - len).collect();
-        len += take.len().max(1);
-        out.push(take);
     }
-    out
 }
 
-fn collector_loop(app: AppHandle, shared: SharedState) {
-    let mut collector = match Collector::new() {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("rmon: {e}");
-            return;
-        }
-    };
-    let mut history = History::slim(ANALYZE_WINDOW);
-    let mut chart: VecDeque<HistoryPoint> = VecDeque::new();
-    let mut suspects: Vec<Suspect> = Vec::new();
-    let mut growth = std::collections::HashMap::new();
-    let thresholds = Thresholds::default();
-    let mut tick: u32 = 0;
+fn tray_line(s: &Suspect) -> String {
+    let line = format!("{} — {}", fmt::bytes(s.reclaim), s.reason);
+    if line.chars().count() <= TRAY_LINE {
+        line
+    } else {
+        line.chars().take(TRAY_LINE - 1).chain(std::iter::once('…')).collect()
+    }
+}
 
-    loop {
-        let started = Instant::now();
-        match collector.snapshot() {
-            Ok(snap) => {
-                chart.push_back(HistoryPoint {
-                    t: snap.taken_at,
-                    used: snap.system.used,
-                    swap_used: snap.system.swap_used,
-                    compressed: snap.system.compressed,
-                    pressure: snap.system.pressure,
-                });
-                while chart.front().is_some_and(|p| p.t + CHART_WINDOW < snap.taken_at) {
-                    chart.pop_front();
-                }
-                // Первый снимок без CPU — в анализ берём со второго.
-                if tick % ANALYZE_EVERY == 1 {
-                    history.push(snap.clone());
-                    suspects = analyze(&history, &thresholds);
-                    growth = growth_rates(&history);
-                }
-                let rows = snap
-                    .processes
-                    .iter()
-                    .map(|p| ProcessRow {
-                        pid: p.pid,
-                        ppid: p.ppid,
-                        name: p.name.clone(),
-                        exe: p.exe.clone(),
-                        args: short_args(&p.args),
-                        uid: p.uid,
-                        footprint: p.footprint,
-                        rss: p.rss,
-                        cpu_pct: p.cpu_pct,
-                        threads: p.threads,
-                        state: p.state,
-                        started_at: p.started_at,
-                        app_group: p.app_group.clone(),
-                        growth_per_min: growth.get(&(p.pid, p.started_at)).copied(),
-                        policy: policy_for(p),
-                    })
-                    .collect();
-                let state = State {
-                    taken_at: snap.taken_at,
-                    system: snap.system,
-                    history: chart.iter().cloned().collect(),
-                    groups: app_groups(&snap),
-                    processes: rows,
-                    suspects: suspects.clone(),
-                };
-                update_tray(&app, &state);
-                let visible = app.get_webview_window("main").and_then(|w| w.is_visible().ok()).unwrap_or(false);
-                if visible {
-                    let _ = app.emit("rmon://state", &state);
-                }
-                *shared.state.lock().unwrap() = Some(state);
-                *shared.procs.lock().unwrap() = snap.processes;
-            }
-            Err(e) => eprintln!("rmon: снимок не удался: {e}"),
-        }
-        tick = tick.wrapping_add(1);
-        std::thread::sleep(TICK.saturating_sub(started.elapsed()));
+/// Состояние приложения.
+#[derive(Default)]
+struct AppState {
+    monitor: Mutex<Option<MonitorHandle>>,
+    /// Подписка окна на сводку.
+    channel: Mutex<Option<Channel<Arc<Dashboard>>>>,
+    tray: Mutex<TrayView>,
+}
+
+impl AppState {
+    fn monitor(&self) -> Result<MonitorHandle, String> {
+        self.monitor.lock().unwrap_or_else(|e| e.into_inner()).clone().ok_or_else(|| "монитор ещё не запущен".to_string())
+    }
+}
+
+fn deliver(app: &AppHandle, d: &Arc<Dashboard>) {
+    let state = app.state::<AppState>();
+    update_tray(app, &state, d);
+    let visible = app.get_webview_window("main").and_then(|w| w.is_visible().ok()).unwrap_or(false);
+    if !visible {
+        return;
+    }
+    let channel = state.channel.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    if let Some(ch) = channel
+        && ch.send(d.clone()).is_err()
+    {
+        // Окно перезагрузилось — подписка умерла; новая придёт с `subscribe`.
+        *state.channel.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 }
 
@@ -193,38 +108,48 @@ fn pressure_icon(p: Pressure) -> Image<'static> {
     Image::new_owned(px, n, n)
 }
 
-fn update_tray(app: &AppHandle, s: &State) {
+fn update_tray(app: &AppHandle, state: &AppState, d: &Dashboard) {
+    let next = TrayView::of(d);
+    let mut cur = state.tray.lock().unwrap_or_else(|e| e.into_inner());
+    if *cur == next {
+        return;
+    }
     let Some(tray) = app.tray_by_id("main") else { return };
-    let _ = tray.set_icon(Some(pressure_icon(s.system.pressure)));
-    let title = fmt::bytes(s.system.used);
-    #[cfg(target_os = "macos")]
-    let _ = tray.set_title(Some(title.as_str()));
-    let _ = tray.set_tooltip(Some(format!(
-        "Давление {} · занято {} · своп {}",
-        s.system.pressure.as_str(),
-        title,
-        fmt::bytes(s.system.swap_used)
-    )));
-    if let Ok(menu) = build_menu(app, &s.suspects) {
+    if cur.pressure != next.pressure
+        && let Some(p) = next.pressure
+    {
+        let _ = tray.set_icon(Some(pressure_icon(p)));
+    }
+    if cur.title != next.title {
+        #[cfg(target_os = "macos")]
+        let _ = tray.set_title(Some(next.title.as_str()));
+    }
+    if cur.tooltip != next.tooltip {
+        let _ = tray.set_tooltip(Some(next.tooltip.as_str()));
+    }
+    if cur.lines != next.lines
+        && let Ok(menu) = build_menu(app, &next.lines)
+    {
         let _ = tray.set_menu(Some(menu));
     }
+    *cur = next;
 }
 
-fn build_menu(app: &AppHandle, suspects: &[Suspect]) -> tauri::Result<Menu<tauri::Wry>> {
+fn build_menu(app: &AppHandle, lines: &[String]) -> tauri::Result<Menu<tauri::Wry>> {
     let menu = Menu::new(app)?;
-    menu.append(&MenuItem::with_id(app, "open", "Открыть", true, None::<&str>)?)?;
+    menu.append(&MenuItem::with_id(app, "open", "Открыть Resource Monitor", true, None::<&str>)?)?;
     menu.append(&PredefinedMenuItem::separator(app)?)?;
-    if suspects.is_empty() {
+    if lines.is_empty() {
         menu.append(&MenuItem::with_id(app, "none", "Подозреваемых нет", false, None::<&str>)?)?;
     } else {
         menu.append(&MenuItem::with_id(app, "hdr", "Подозреваемые:", false, None::<&str>)?)?;
-        for (i, s) in suspects.iter().take(5).enumerate() {
-            let text: String = s.reason.chars().take(80).collect();
-            menu.append(&MenuItem::with_id(app, format!("s{i}"), text, false, None::<&str>)?)?;
+        for (i, line) in lines.iter().enumerate() {
+            // Пункт открывает окно: снимать из меню нельзя — только через окно с подтверждением.
+            menu.append(&MenuItem::with_id(app, format!("s{i}"), line, true, None::<&str>)?)?;
         }
     }
     menu.append(&PredefinedMenuItem::separator(app)?)?;
-    menu.append(&MenuItem::with_id(app, "quit", "Выход", true, None::<&str>)?)?;
+    menu.append(&MenuItem::with_id(app, "quit", "Выйти", true, Some("CmdOrCtrl+Q"))?)?;
     Ok(menu)
 }
 
@@ -233,65 +158,59 @@ fn show_main(app: &AppHandle) {
         let _ = w.show();
         let _ = w.unminimize();
         let _ = w.set_focus();
-        // Окно было скрыто и событий не получало — сразу отдаём свежее состояние.
-        if let Some(s) = app.state::<SharedState>().state.lock().unwrap().clone() {
-            let _ = app.emit("rmon://state", &s);
+        // Пока окно было скрыто, сводки не уходили — отдаём свежую сразу.
+        if let Ok(m) = app.state::<AppState>().monitor()
+            && let Some(d) = m.dashboard()
+        {
+            deliver(app, &d);
         }
     }
 }
 
+/// Подписка окна на сводку; сразу отдаёт последнюю.
 #[tauri::command]
-fn get_state(shared: tauri::State<'_, SharedState>) -> Option<State> {
-    shared.state.lock().unwrap().clone()
+fn subscribe(state: tauri::State<'_, AppState>, channel: Channel<Arc<Dashboard>>) -> Result<(), String> {
+    if let Some(d) = state.monitor()?.dashboard() {
+        channel.send(d).map_err(|e| e.to_string())?;
+    }
+    *state.channel.lock().unwrap_or_else(|e| e.into_inner()) = Some(channel);
+    Ok(())
 }
 
+/// Подробности процесса.
+#[tauri::command]
+async fn process_details(state: tauri::State<'_, AppState>, pid: i32, started_at: u64) -> Result<ProcessDetails, String> {
+    let m = state.monitor()?;
+    tauri::async_runtime::spawn_blocking(move || m.details(pid, Some(started_at)))
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("процесса {pid} уже нет"))
+}
+
+/// Снять процесс через защитный слой ядра.
 #[tauri::command]
 async fn kill_process(
-    app: AppHandle,
-    shared: tauri::State<'_, SharedState>,
+    state: tauri::State<'_, AppState>,
     pid: i32,
     started_at: u64,
     confirm: bool,
     reason: String,
 ) -> Result<KillOutcome, String> {
-    let target = shared
-        .procs
-        .lock()
-        .unwrap()
-        .iter()
-        .find(|p| p.pid == pid && p.started_at == started_at)
-        .cloned()
-        .ok_or_else(|| format!("процесса {pid} уже нет в снимке"))?;
+    let m = state.monitor()?;
     let req = KillRequest {
         signal_term_grace: Duration::from_secs(5),
         confirm,
         requested_by: Requester::App,
-        reason: if reason.is_empty() { "из окна".into() } else { reason },
+        reason: if reason.trim().is_empty() { "из окна".into() } else { reason },
         dry_run: false,
     };
-    let outcome = tauri::async_runtime::spawn_blocking(move || kill(&target, req))
+    tauri::async_runtime::spawn_blocking(move || m.kill(pid, Some(started_at), req))
         .await
         .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())?;
-    if outcome.exited {
-        // Убираем снятый процесс из кэша сразу, не дожидаясь следующего снимка.
-        let mut guard = shared.state.lock().unwrap();
-        if let Some(s) = guard.as_mut() {
-            s.processes.retain(|p| !(p.pid == pid && p.started_at == started_at));
-            s.suspects.retain(|x| !(x.pid == pid && x.started_at == started_at));
-            for g in &mut s.groups {
-                if let Some(i) = g.pids.iter().position(|&x| x == pid) {
-                    g.pids.remove(i);
-                    g.count -= 1;
-                    g.footprint = g.footprint.saturating_sub(outcome.reclaimed);
-                }
-            }
-            let _ = app.emit("rmon://state", &*s);
-        }
-    }
-    Ok(outcome)
+        .map_err(|e| e.to_string())
 }
 
+/// Журналы rmon и memory-guard, новые сверху.
 #[tauri::command]
 async fn read_journal() -> Vec<JournalEntry> {
     tauri::async_runtime::spawn_blocking(|| journal::read_recent(300)).await.unwrap_or_default()
@@ -299,25 +218,23 @@ async fn read_journal() -> Vec<JournalEntry> {
 
 /// Точка входа приложения.
 pub fn run() {
-    let shared: SharedState = Arc::new(Shared::default());
     let app = tauri::Builder::default()
-        .manage(shared.clone())
-        .invoke_handler(tauri::generate_handler![get_state, kill_process, read_journal])
-        .setup(move |app| {
+        .manage(AppState::default())
+        .invoke_handler(tauri::generate_handler![subscribe, process_details, kill_process, read_journal])
+        .setup(|app| {
             let handle = app.handle().clone();
             TrayIconBuilder::with_id("main")
                 .icon(pressure_icon(Pressure::Normal))
+                .tooltip("Resource Monitor")
                 .menu(&build_menu(&handle, &[])?)
                 .on_menu_event(|app, ev| match ev.id().as_ref() {
-                    "open" => show_main(app),
                     "quit" => app.exit(0),
-                    _ => {}
+                    _ => show_main(app),
                 })
                 .build(app)?;
-            let shared = shared.clone();
-            std::thread::Builder::new()
-                .name("rmon-collector".into())
-                .spawn(move || collector_loop(handle, shared))?;
+            let notify = handle.clone();
+            let monitor = monitor::spawn(MonitorConfig::default(), move |d| deliver(&notify, d))?;
+            *app.state::<AppState>().monitor.lock().unwrap_or_else(|e| e.into_inner()) = Some(monitor);
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -335,6 +252,7 @@ pub fn run() {
         if let RunEvent::Reopen { .. } = event {
             show_main(app);
         }
-        let _ = (&app, &event);
+        #[cfg(not(target_os = "macos"))]
+        let _ = (app, event);
     });
 }
