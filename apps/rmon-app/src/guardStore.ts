@@ -7,16 +7,15 @@ import { errText } from "./format";
 import type { GuardSettings, GuardStatus } from "./types";
 
 export interface GuardState {
+  /** Живой статус; `status.config` — действующие настройки сторожа (из config.toml). */
   status: GuardStatus | null;
-  /** Флаги сторожа из настроек (что сохранено в config.toml). */
-  settings: GuardSettings | null;
   error: string | null;
   saving: boolean;
 }
 
 const POLL_MS = 3000;
 
-let state: GuardState = { status: null, settings: null, error: null, saving: false };
+let state: GuardState = { status: null, error: null, saving: false };
 const listeners = new Set<() => void>();
 let stop: (() => void) | null = null;
 
@@ -39,8 +38,6 @@ function start() {
   let off: (() => void) | null = null;
   backend()
     .then(async (b) => {
-      const s = await b.getSettings();
-      if (alive) set({ settings: s.guard });
       const unsub = await b.onGuardEvent(() => void refresh());
       if (alive) off = unsub;
       else unsub();
@@ -79,18 +76,16 @@ export const guardStore = {
     set({ status });
   },
   /**
-   * Поменять флаги сторожа: запись в config.toml через `save_settings` (бэкенд проверяет и
-   * применяет сразу). Отказ — исключение со строкой по-русски.
+   * Поменять настройки сторожа: запись в config.toml через `save_settings` поверх свежего
+   * файла (бэкенд проверяет и применяет до ответа). Отказ — исключение со строкой по-русски.
    */
-  async patch(patch: Partial<GuardSettings>): Promise<GuardSettings> {
+  async patch(patch: Partial<GuardSettings>): Promise<void> {
     set({ saving: true });
     try {
       const b = await backend();
       const cur = await b.getSettings();
-      const saved = await b.saveSettings({ ...cur, guard: { ...cur.guard, ...patch } });
-      set({ settings: saved.guard });
+      await b.saveSettings({ ...cur, guard: { ...cur.guard, ...patch } });
       await refresh();
-      return saved.guard;
     } finally {
       set({ saving: false });
     }
@@ -98,8 +93,8 @@ export const guardStore = {
 };
 
 /** Короткое имя режима для полосы вкладок и цвет точки. */
-export function modeBrief(s: GuardStatus | null, settings: GuardSettings | null): { label: string; tone: "on" | "dry" | "off" | "wait" } {
-  const kind = s?.mode.kind ?? (settings?.enabled ? "armed" : "off");
+export function modeBrief(s: GuardStatus | null): { label: string; tone: "on" | "dry" | "off" | "wait" } {
+  const kind = s?.mode.kind ?? "off";
   switch (kind) {
     case "armed":
       return { label: "сторожит", tone: "on" };

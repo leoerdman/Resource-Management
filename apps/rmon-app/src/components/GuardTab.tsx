@@ -1,12 +1,11 @@
 import { memo, useState } from "react";
 import { backend } from "../api";
 import { cwdShort, errText, fmtBytes, fmtClock, fmtDateTime } from "../format";
-import type { Author, GuardConfig, GuardEvent, GuardMode, GuardSettings, GuardZone, Origin } from "../types";
+import type { Author, GuardEvent, GuardMode, GuardSettings, GuardZone, Origin } from "../types";
 import { guardStore, useGuard } from "../guardStore";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Switch } from "./Controls";
-
-const MB = 1024 * 1024;
+import { GuardSettingsPanel } from "./GuardSettingsPanel";
 
 export const MODE_LABEL: Record<GuardMode["kind"], string> = {
   off: "выключен",
@@ -35,16 +34,6 @@ const OUTCOME_LABEL: Record<string, string> = {
   denied: "нет прав",
   refused: "отказ защитного слоя",
 };
-
-export const LEVEL_LABEL: Record<number, string> = { 1: "нормальное", 2: "жёлтое", 4: "красное" };
-
-/** "45 с", "10 мин", "1 ч", "1 ч 30 мин". */
-export function fmtSecs(s: number): string {
-  if (s < 60) return `${s} с`;
-  if (s < 3600) return s % 60 ? `${Math.floor(s / 60)} мин ${s % 60} с` : `${s / 60} мин`;
-  const m = Math.round(s / 60);
-  return m % 60 ? `${Math.floor(m / 60)} ч ${m % 60} мин` : `${m / 60} ч`;
-}
 
 function fmtWhen(ts: number): string {
   return Date.now() / 1000 - ts < 12 * 3600 ? fmtClock(ts) : fmtDateTime(ts);
@@ -88,7 +77,7 @@ interface Props {
 type Confirm = "retire" | "restore" | null;
 
 export function GuardTab({ onToast }: Props) {
-  const { status, settings: guard, error, saving } = useGuard();
+  const { status, error, saving } = useGuard();
   const [confirm, setConfirm] = useState<Confirm>(null);
 
   async function patchGuard(patch: Partial<GuardSettings>, done: string) {
@@ -125,8 +114,6 @@ export function GuardTab({ onToast }: Props) {
   }
 
   const { mode, config: cfg, legacy } = status;
-  const enabled = guard?.enabled ?? cfg.enabled;
-  const dryRun = guard?.dry_run ?? cfg.dry_run;
 
   return (
     <div className="pane-scroll">
@@ -162,15 +149,15 @@ export function GuardTab({ onToast }: Props) {
             <Switch
               big
               label="Сторож включён"
-              checked={enabled}
+              checked={cfg.enabled}
               disabled={saving}
               onChange={(v) => patchGuard({ enabled: v }, v ? "Сторож включён" : "Сторож выключен")}
             />
             <Switch
               label="Режим пробы"
               hint="только пишет, кого снял бы"
-              checked={dryRun}
-              disabled={saving || !enabled}
+              checked={cfg.dry_run}
+              disabled={saving || !cfg.enabled}
               onChange={(v) => patchGuard({ dry_run: v }, v ? "Режим пробы: никого не снимает" : "Боевой режим")}
             />
           </div>
@@ -204,7 +191,7 @@ export function GuardTab({ onToast }: Props) {
           </div>
         )}
 
-        <HowItWorks cfg={cfg} configFile={status.config_file} onOpenConfig={openConfig} />
+        <GuardSettingsPanel cfg={cfg} configFile={status.config_file} saving={saving} onOpenConfig={openConfig} onToast={onToast} />
 
         <section>
           <h3 className="sec-title">События</h3>
@@ -244,78 +231,6 @@ export function GuardTab({ onToast }: Props) {
         </ConfirmDialog>
       )}
     </div>
-  );
-}
-
-function HowItWorks({ cfg, configFile, onOpenConfig }: { cfg: GuardConfig; configFile: string; onOpenConfig: () => void }) {
-  const red = cfg.red;
-  const limits = cfg.limits.map((l) => `${l.max} за ${fmtSecs(Number(l.window_secs))}`).join(", ");
-  const kinds = [...new Set(cfg.allow.map((a) => a.name))].join(", ");
-  return (
-    <section>
-      <h3 className="sec-title">Как работает</h3>
-      <ul className="how">
-        <li>
-          <b>Красная зона</b> — давление {LEVEL_LABEL[red.pressure_level] ?? red.pressure_level} или выше, или доступно не
-          больше {red.min_available_pct} %, или давление от {LEVEL_LABEL[red.swap_red_from_level] ?? red.swap_red_from_level} и
-          своп от {fmtBytes(Number(red.swap_red_mb) * MB)}.
-        </li>
-        <li>
-          Снимает, только если красное держится <b>{fmtSecs(cfg.sustain_secs)}</b> — короткие всплески не в счёт.
-        </li>
-        <li>
-          Жертва — самый большой прогон ({kinds || "по правилам «можно»"}) от <b>{cfg.min_victim_mb} МБ</b>: сначала SIGTERM,
-          через {fmtSecs(cfg.term_grace_secs)} — SIGKILL.
-        </li>
-        <li>Не трогает приложения, сессии и всё из списка «никогда» ({cfg.never.length}).</li>
-        <li>
-          Не больше {limits || "—"}; после снятия пауза {fmtSecs(cfg.after_kill_secs)}.{" "}
-          {cfg.notify ? "О каждом снятии — системное уведомление" : "Уведомления о снятии выключены"}
-          {cfg.notify_dry_run ? ", в пробе тоже." : "."}
-        </li>
-      </ul>
-      <details className="rules">
-        <summary>
-          Правила: «можно» ({cfg.allow.length}) и «никогда» ({cfg.never.length})
-        </summary>
-        <div className="rules-cols">
-          <div>
-            <h4>Можно снимать</h4>
-            <ul>
-              {cfg.allow.map((r, i) => (
-                <li key={i}>
-                  <b>{r.name}</b> <code>exe {r.exe}</code>
-                  {r.args && <code>args {r.args}</code>}
-                  {r.args_not && <code>кроме {r.args_not}</code>}
-                  {r.parent_not && <code>родитель не {r.parent_not}</code>}
-                </li>
-              ))}
-            </ul>
-          </div>
-          <div>
-            <h4>Никогда</h4>
-            <ul>
-              {cfg.never.map((r, i) => (
-                <li key={i}>
-                  <b>{r.name}</b>
-                  {r.exe && <code>exe {r.exe}</code>}
-                  {r.path && <code>путь {r.path}</code>}
-                  {r.args && <code>args {r.args}</code>}
-                </li>
-              ))}
-            </ul>
-          </div>
-        </div>
-      </details>
-      <div className="config-line">
-        <button className="btn btn-small" onClick={onOpenConfig}>
-          Изменить в config.toml
-        </button>
-        <span className="dim small mono ellipsis" title={configFile}>
-          {configFile}
-        </span>
-      </div>
-    </section>
   );
 }
 

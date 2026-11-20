@@ -254,6 +254,7 @@ export function createMockGuard(getDash: () => Dashboard): GuardApi & { tick(d: 
       if (g.min_victim_mb < 100) throw "Жертва от: меньше 100 МБ нельзя — сторож начнёт снимать мелочь";
       if (g.sustain_secs < 5) throw "«Держится» — не меньше 5 с, иначе сторож сработает на случайный всплеск";
       if (g.red.min_available_pct > 50) throw "«Доступно не больше» — не больше 50 %";
+      if (!g.limits.length) throw "нужен хотя бы один предел убийств (окно от 10 с, от 1 убийства)";
       for (const l of g.limits)
         if (l.max < 1 || l.window_secs < 10) throw "Предел: не меньше 1 снятия и окно не короче 10 с";
       if (next.thresholds.duplicate_count < 2) throw "Брошенных копий — от 2";

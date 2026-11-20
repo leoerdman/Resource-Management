@@ -274,7 +274,8 @@ pub struct GuardHandle {
 
 enum Msg {
     Snapshot(Arc<Snapshot>),
-    Reload,
+    /// Перечитать настройки; отправитель ждёт подтверждения, что они применены.
+    Reload(std::sync::mpsc::Sender<()>),
 }
 
 impl GuardHandle {
@@ -299,54 +300,62 @@ impl GuardHandle {
         notify: Option<bool>,
     ) -> Result<GuardStatus, String> {
         persist_flags(enabled, dry_run, notify)?;
-        let _ = self.tx.send(Msg::Reload);
-        // Применение — на следующем шаге потока; ждём его коротко, чтобы вернуть свежий статус.
-        let until = Instant::now() + Duration::from_secs(2);
-        let want = |s: &GuardStatus| {
-            enabled.is_none_or(|v| s.config.enabled == v)
-                && dry_run.is_none_or(|v| s.config.dry_run == v)
-                && notify.is_none_or(|v| s.config.notify == v)
-        };
-        loop {
-            let s = self.status();
-            if want(&s) || Instant::now() > until {
-                return Ok(s);
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
+        Ok(self.reload())
     }
 
-    /// Перечитать настройки немедленно (после правки из окна).
-    pub fn reload(&self) {
-        let _ = self.tx.send(Msg::Reload);
+    /// Перечитать настройки и дождаться, пока поток сторожа их применит: возвращённый
+    /// статус уже несёт новую конфигурацию. Поток занят дольше 2 с — статус как есть.
+    pub fn reload(&self) -> GuardStatus {
+        let (ack, applied) = std::sync::mpsc::channel();
+        if self.tx.send(Msg::Reload(ack)).is_ok() {
+            let _ = applied.recv_timeout(Duration::from_secs(2));
+        }
+        self.status()
     }
 
     /// Перенести обязанность старого сторожа в rmon.
     pub fn retire_legacy(&self) -> Result<GuardStatus, String> {
         legacy::retire()?;
-        let _ = self.tx.send(Msg::Reload);
-        std::thread::sleep(Duration::from_millis(200));
-        Ok(self.status())
+        Ok(self.reload())
     }
 
     /// Вернуть старого сторожа.
     pub fn restore_legacy(&self) -> Result<GuardStatus, String> {
         legacy::restore()?;
-        let _ = self.tx.send(Msg::Reload);
-        std::thread::sleep(Duration::from_millis(200));
-        Ok(self.status())
+        Ok(self.reload())
     }
+}
+
+fn lock_path() -> PathBuf {
+    config::log_dir().join("guard.lock")
 }
 
 /// Блокировка «один сторож на машину».
 fn guard_lock() -> Option<File> {
-    let path = config::log_dir().join("guard.lock");
     let _ = std::fs::create_dir_all(config::log_dir());
-    let f = OpenOptions::new().create(true).truncate(false).write(true).open(&path).ok()?;
+    take_lock(&lock_path())
+}
+
+fn take_lock(path: &std::path::Path) -> Option<File> {
+    let f = OpenOptions::new().create(true).truncate(false).write(true).open(path).ok()?;
     f.try_lock().ok()?;
     let _ = f.set_len(0);
     let _ = writeln!(&f, "{}", std::process::id());
     Some(f)
+}
+
+/// Кто сейчас держит сторожа (pid). Файл после снятия блокировки хранит pid прежнего
+/// хозяина, поэтому решает сама блокировка: удалось взять — сторожа никто не держит.
+pub fn lock_holder() -> Option<u32> {
+    holder_at(&lock_path())
+}
+
+fn holder_at(path: &std::path::Path) -> Option<u32> {
+    let f = File::open(path).ok()?;
+    if f.try_lock().is_ok() {
+        return None;
+    }
+    std::fs::read_to_string(path).ok()?.trim().parse().ok()
 }
 
 struct Runner {
@@ -412,8 +421,8 @@ impl Runner {
         if self.lock.is_none() {
             self.lock = guard_lock();
             if self.lock.is_none() {
-                let who = std::fs::read_to_string(config::log_dir().join("guard.lock")).unwrap_or_default();
-                return GuardMode::Standby(format!("сторож уже работает в другом процессе rmon (pid {})", who.trim()));
+                let who = lock_holder().map(|p| format!(" (pid {p})")).unwrap_or_default();
+                return GuardMode::Standby(format!("сторож уже работает в другом процессе rmon{who}"));
             }
         }
         if g.dry_run { GuardMode::DryRun } else { GuardMode::Armed }
@@ -553,7 +562,7 @@ impl Runner {
         while let Ok(msg) = rx.recv() {
             match msg {
                 Msg::Snapshot(snap) => self.step(&snap),
-                Msg::Reload => {
+                Msg::Reload(ack) => {
                     self.reload(true);
                     self.legacy_checked = None;
                     let mode = self.decide_mode();
@@ -566,6 +575,7 @@ impl Runner {
                         (st.status.zone_why.clone(), st.status.red_for_secs)
                     };
                     self.publish(why, red);
+                    let _ = ack.send(());
                 }
             }
         }
@@ -613,4 +623,24 @@ pub fn spawn(on_event: impl Fn(&GuardEvent) + Send + Sync + 'static) -> crate::R
         .spawn(move || runner.run(rx))
         .map_err(|e| Error::Syscall { call: "thread::spawn", source: e })?;
     Ok(GuardHandle { tx, state })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn holder_is_the_live_lock_not_the_stale_file() {
+        let dir = std::env::temp_dir().join(format!("rmon-guard-lock-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("guard.lock");
+        assert_eq!(holder_at(&path), None, "нет файла — нет хозяина");
+        let held = take_lock(&path).expect("блокировка свободна");
+        assert_eq!(holder_at(&path), Some(std::process::id()));
+        assert!(take_lock(&path).is_none(), "второй сторож не заступает");
+        drop(held);
+        assert!(std::fs::read_to_string(&path).unwrap().trim().parse::<u32>().is_ok(), "в файле остался прежний pid");
+        assert_eq!(holder_at(&path), None, "снятая блокировка — хозяина нет");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

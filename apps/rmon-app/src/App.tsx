@@ -184,7 +184,7 @@ export default function App() {
         )}
         {tab === "journal" && <JournalTab />}
         {tab === "guard" && <GuardTab onToast={pushToast} />}
-        {tab === "settings" && <SettingsTab onToast={pushToast} />}
+        {tab === "settings" && <SettingsTab onToast={pushToast} onOpenGuard={() => setTab("guard")} />}
       </main>
       {details && (
         <DetailsDrawer

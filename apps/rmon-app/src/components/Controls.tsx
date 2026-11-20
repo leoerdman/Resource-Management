@@ -1,4 +1,4 @@
-import { useEffect, useId, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 /** macOS-style switch (a styled checkbox: keyboard and screen readers work as usual). */
 export function Switch(props: {
@@ -38,11 +38,16 @@ const showNum = (v: number) => (Number.isNaN(v) ? "" : String(v).replace(".", ",
 /**
  * Number field that accepts a Russian decimal comma. Keeps the typed text while it is
  * half-written ("14,"); an empty or broken value is reported as NaN.
+ *
+ * `onChange` reports every keystroke (forms with a Save button). `onCommit` applies the value
+ * on Enter or when the field loses focus (live settings); a broken value or a refused commit
+ * (`false`) puts the last good value back.
  */
 export function NumField(props: {
   label: ReactNode;
   value: number;
-  onChange: (v: number) => void;
+  onChange?: (v: number) => void;
+  onCommit?: (v: number) => boolean | Promise<boolean>;
   unit?: string;
   hint?: ReactNode;
   min?: number;
@@ -56,6 +61,22 @@ export function NumField(props: {
   }, [props.value]);
   const n = parseNum(text);
   const bad = Number.isNaN(n) || (props.min != null && n < props.min);
+
+  // Enter and the blur after it must not save the same value twice.
+  const inFlight = useRef<number | null>(null);
+  async function commit() {
+    if (!props.onCommit) return;
+    const v = parseNum(text);
+    if (v === props.value || v === inFlight.current) return;
+    inFlight.current = v;
+    try {
+      const ok = Number.isFinite(v) && v >= (props.min ?? 0) && (await props.onCommit(v));
+      if (!ok) setText(showNum(props.value));
+    } finally {
+      inFlight.current = null;
+    }
+  }
+
   return (
     <div className="field">
       <label htmlFor={id}>{props.label}</label>
@@ -68,7 +89,16 @@ export function NumField(props: {
           value={text}
           onChange={(e) => {
             setText(e.target.value);
-            props.onChange(parseNum(e.target.value));
+            props.onChange?.(parseNum(e.target.value));
+          }}
+          onBlur={() => void commit()}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && props.onCommit) {
+              e.preventDefault();
+              void commit();
+            } else if (e.key === "Escape" && props.onCommit) {
+              setText(showNum(props.value));
+            }
           }}
           spellCheck={false}
         />

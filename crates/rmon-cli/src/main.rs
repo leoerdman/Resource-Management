@@ -452,11 +452,11 @@ fn guard_cmd(json: bool, action: GuardCmd, paint: Paint) -> Result<()> {
     }
     let cfg = Config::load()?;
     let legacy = guard::legacy::status();
-    let holder = std::fs::read_to_string(config::log_dir().join("guard.lock")).unwrap_or_default();
+    let holder = guard::runner::lock_holder();
     let events = read_events(10);
     if json {
         return print_json(&serde_json::json!({
-            "config": cfg.guard, "legacy": legacy, "lock_holder": holder.trim(), "recent": events,
+            "config": cfg.guard, "legacy": legacy, "lock_holder": holder, "recent": events,
         }));
     }
     let g = &cfg.guard;
@@ -483,8 +483,8 @@ fn guard_cmd(json: bool, action: GuardCmd, paint: Paint) -> Result<()> {
         if g.notify { "да" } else { "нет" }
     );
     println!("  старый memory-guard: {legacy:?}");
-    if !holder.trim().is_empty() {
-        println!("  держит сторожа: pid {}", holder.trim());
+    if let Some(pid) = holder {
+        println!("  держит сторожа: pid {pid}");
     }
     println!("\n{}", paint.bold("Последние события"));
     for e in events {

@@ -6,9 +6,9 @@ import { guardStore, modeBrief, useGuard } from "../guardStore";
  * Подпись открывает вкладку «Сторож»; переключатель пишет `[guard] enabled` в config.toml.
  */
 export function GuardToggle({ onOpen, onToast }: { onOpen: () => void; onToast: (ok: boolean, text: string) => void }) {
-  const { status, settings, saving } = useGuard();
-  const enabled = settings?.enabled ?? status?.config.enabled ?? false;
-  const { label, tone } = modeBrief(status, settings);
+  const { status, saving } = useGuard();
+  const enabled = status?.config.enabled ?? false;
+  const { label, tone } = modeBrief(status);
   const detail =
     status && (status.mode.kind === "standby" || status.mode.kind === "broken") ? status.mode.detail : undefined;
 

@@ -1704,3 +1704,33 @@ code {
     display: none;
   }
 }
+
+/* Настройки сторожа во вкладке «Сторож»: блоки по важности. */
+.gset {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.gset-block {
+  padding: 10px 16px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+}
+.gset-block .fields:first-of-type {
+  margin-top: 4px;
+}
+.gset-block .limits {
+  margin-bottom: 4px;
+}
+.gset-sum {
+  margin: 10px 0 0;
+  line-height: 1.45;
+}
+.settings-note {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
