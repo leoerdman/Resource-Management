@@ -151,6 +151,11 @@ fn list_sorts_filters_and_groups() {
     let (out, text) = list(&d, &a(SortKey::Growth, 25, None, false));
     assert_eq!(names(&out), vec![10, 30, 21, 20], "неизвестный рост — в конце");
     assert!(text.contains(&bytes_per_min(-(MIB as f64))), "убыль со знаком: {text}");
+    assert!(!text.contains("Рост пока неизвестен"), "{text}");
+    let mut early = dashboard();
+    early.processes.iter_mut().for_each(|r| r.growth_per_min = None);
+    let (_, text) = list(&early, &a(SortKey::Growth, 25, None, false));
+    assert!(text.contains("Рост пока неизвестен"), "сразу после запуска — подсказка: {text}");
     let (out, _) = list(&d, &a(SortKey::Pid, 25, None, false));
     assert_eq!(names(&out), vec![10, 20, 21, 30]);
 
@@ -242,7 +247,7 @@ fn kill_outcomes_map_to_statuses() {
     let e = Error::ConfirmationRequired { pid: 7, name: "sleep".into(), reason: "системная утилита".into() };
     let out = kill_err(7, Some("sleep"), Some(&confirm), &e);
     assert_eq!(out.status, "needs_confirmation");
-    assert!(out.is_error() && out.message.contains("спросите владельца"), "{}", out.message);
+    assert!(out.is_error() && out.message.contains("согласие владельца"), "{}", out.message);
     let e = Error::Protected { pid: 1, name: "launchd".into(), reason: "ядро системы".into() };
     assert_eq!(kill_err(1, None, None, &e).status, "refused_protected");
     assert_eq!(kill_err(9, None, None, &Error::ProcessGone { pid: 9 }).status, "not_found");

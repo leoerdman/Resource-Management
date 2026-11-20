@@ -28,6 +28,8 @@ const TOP_SUSPECTS: usize = 5;
 const SERIES_POINTS: usize = 30;
 /// Потомков в `process_details`.
 const TOP_CHILDREN: usize = 15;
+/// Рост ещё не посчитан ни для одной строки.
+const GROWTH_PENDING: &str = "Рост пока неизвестен: он считается по трём и более снимкам (≈15 с после запуска сервера).\n";
 
 /// Имя варианта, как его сериализует serde (`normal`, `sleeping`, `hog`…).
 fn tag<T: Serialize>(v: &T) -> String {
@@ -512,6 +514,9 @@ pub fn list(d: &Dashboard, a: &ListArgs) -> (ListOut, String) {
             x.cpu_pct = (x.cpu_pct * 10.0).round() / 10.0;
         }
         t.push_str(&format!("Приложения ({head}порядок {}): показано {} из {matched}.\n", a.sort.as_str(), apps.len()));
+        if a.sort == SortKey::Growth && apps.iter().all(|x| x.growth_per_min.is_none()) {
+            t.push_str(GROWTH_PENDING);
+        }
         for x in &apps {
             t.push_str(&format!(
                 "  {:>9}  {:>6}  {:>12}  {} ({} проц.)\n",
@@ -535,6 +540,9 @@ pub fn list(d: &Dashboard, a: &ListArgs) -> (ListOut, String) {
     let matched = rows.len();
     rows.truncate(limit);
     t.push_str(&format!("Процессы ({head}порядок {}): показано {} из {matched}.\n", a.sort.as_str(), rows.len()));
+    if a.sort == SortKey::Growth && rows.iter().all(|r| r.growth_per_min.is_none()) {
+        t.push_str(GROWTH_PENDING);
+    }
     t.push_str(&format!("  {:>7}  {:>9}  {:>6}  {:>12}  имя — политика\n", "pid", "память", "cpu", "рост"));
     for r in &rows {
         t.push_str(&format!(
@@ -851,8 +859,8 @@ pub fn kill_err(pid: i32, name: Option<&str>, policy: Option<&KillPolicy>, e: &E
         Error::ConfirmationRequired { .. } => (
             "needs_confirmation",
             format!(
-                "Отказ: {e}. Это приложение владельца — спросите владельца, можно ли снять именно этот процесс, \
-                 и только после его согласия повторите с confirm=true."
+                "Отказ: {e}. Нужно согласие владельца: спросите его, можно ли снять именно этот процесс, \
+                 и только после ответа «да» повторите с confirm=true."
             ),
         ),
         Error::ProcessGone { .. } => ("not_found", e.to_string()),
