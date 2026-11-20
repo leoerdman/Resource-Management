@@ -4,9 +4,11 @@
 # (rustfmt.toml нет, `cargo fmt --check` даёт ~100 диффов). Появится rustfmt.toml — добавить шаг.
 name: CI
 
+# Любая ветка: полосы гоняют CI на своих ветках до слияния в main.
 on:
   push:
-    branches: [main]
+    branches: ["**"]
+    tags-ignore: ["**"]
   pull_request:
   workflow_dispatch:
 
