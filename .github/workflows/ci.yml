@@ -1,0 +1,72 @@
+# Проверки на macOS: формат, clippy, тесты, сверка TS-типов с Rust, фронтенд.
+#
+# Сейчас только macOS — Linux и Windows отложены решением владельца (docs/ROADMAP.md);
+# матрица на три ОС и релиз через tauri-action ждут в ветке worktree-agent-aa473de5ed3207a1d.
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+    tags-ignore: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
+jobs:
+  macos:
+    name: macOS
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/rmon-app/package-lock.json
+
+      - name: Формат
+        run: cargo fmt --all --check
+
+      # Крейт окна требует собранный фронтенд (frontendDist = ../dist).
+      - name: Фронтенд
+        working-directory: apps/rmon-app
+        run: |
+          npm ci
+          npm run build
+          npm test
+
+      # tauri-build падает без sidecar `binaries/rmon-<triple>` (bundle.externalBin).
+      - name: Sidecar CLI для окна
+        run: node scripts/prepare-sidecar.mjs
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      # Тесты заодно пишут ts-rs типы, labels.json и format-cases.json в bindings.
+      - name: Тесты
+        run: cargo test --workspace --locked
+
+      - name: TS-типы и эталоны совпадают с Rust
+        run: |
+          git diff --exit-code -- apps/rmon-app/src/bindings
+          untracked=$(git status --porcelain --untracked-files=all -- apps/rmon-app/src/bindings)
+          if [ -n "$untracked" ]; then
+            echo "::error::Новые несохранённые файлы в bindings — закоммитьте их:"
+            echo "$untracked"
+            exit 1
+          fi

@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "rmon-app-ui",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "apps/rmon-app", "run", "dev"],
+      "port": 1420
+    }
+  ]
+}

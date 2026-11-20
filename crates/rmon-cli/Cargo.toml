@@ -1,0 +1,22 @@
+[package]
+name = "rmon-cli"
+description = "Бинарь rmon: status / ps / suggest / kill"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "rmon"
+path = "src/main.rs"
+
+[dependencies]
+rmon-core = { path = "../rmon-core" }
+rmon-mcp = { path = "../rmon-mcp" }
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+toml.workspace = true

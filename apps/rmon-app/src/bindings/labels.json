@@ -1,0 +1,27 @@
+{
+  "policy": {
+    "confirm": "с подтверждением",
+    "free": "можно снять",
+    "protected": "защищён"
+  },
+  "pressure": {
+    "critical": "критическое",
+    "normal": "нормальное",
+    "warning": "повышенное"
+  },
+  "proc_state": {
+    "running": "работает",
+    "sleeping": "спит",
+    "stopped": "остановлен",
+    "unknown": "неизвестно",
+    "zombie": "зомби"
+  },
+  "suspect_kind": {
+    "duplicate": "Дубль",
+    "growing": "Растёт",
+    "hog": "Большой",
+    "idle": "Простаивает",
+    "orphan": "Сирота",
+    "zombie": "Зомби"
+  }
+}
