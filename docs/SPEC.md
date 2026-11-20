@@ -2,7 +2,7 @@
 
 ## Зачем
 
-Владелец работает с нейросетями и агентами (Claude Code, M Code, десятки `node`/`claude`/`bun`
+Автор работает с нейросетями и агентами (Claude Code, M Code, десятки `node`/`claude`/`bun`
 процессов) на MacBook M4 Pro с 24 ГБ. Ноутбук держится на оперативной памяти: своп 9+ ГБ,
 сжатие 8+ ГБ — обычное дело. Activity Monitor показывает цифры, но не отвечает на главные вопросы:
 **кто съел память, растёт ли он, нужен ли он ещё и можно ли его снять безопасно.**
@@ -10,25 +10,21 @@
 `rmon` отвечает на эти вопросы: в окне — человеку, через MCP — Claude Code, который может снимать
 процессы через защитный слой.
 
-## Сторож памяти (бывший `memory-guard`)
+## Сторож памяти
 
-Раньше на машине работал отдельный демон `~/Programming - Main/Hooks/memory-guard` (Bun, LaunchAgent
-`com.leoerdman.memory-guard`): в красной зоне он сам снимал самый большой `tsgo`/`node`/`bun`-прогон.
-С 2026-11-20 он **перенесён в rmon** (`rmon_core::guard`, решение владельца: «всё через наше
-приложение») — та же логика, проверенная теми же сценариями, плюс:
+Сторож живёт в Resource Monitor (`rmon_core::guard`) и больше нигде: в красной зоне он сам снимает
+самый большой `tsgo`/`node`/`bun`-прогон, а брошенные процессы в простое — в любой зоне.
 
 - работает внутри Resource Monitor на общем `Monitor` (или без окна: `rmon guard run`);
-- **один сторож на машину** — файловая блокировка `guard.lock`; пока жив старый LaunchAgent, сторож
-  rmon ждёт (`standby`), окно предлагает «перенести» (агент выгружается, plist → `*.disabled-by-rmon`,
-  обратимо: `rmon guard restore`);
+- **один сторож на машину** — файловая блокировка `guard.lock`; второй процесс rmon ждёт (`standby`);
 - жертва должна пройти и списки сторожа, и политику снятия rmon (`Free`) — двойной забор;
 - уведомления — системные, из приложения; все настройки сторожа (режим, красная зона, жертва,
   пределы, уведомления) — крутилки во вкладке «Сторож», каждая сразу пишет `config.toml` и
   применяется до ответа; ещё переключатель в полосе вкладок, меню значка, `rmon guard on|off|dry|arm`;
 - кто держит сторожа — решает сама блокировка, а не pid в файле (после снятия там остаётся прежний);
-- настройки — секция `[guard]` в `config.toml` (по умолчанию — значения старого `config.json`);
+- настройки — секция `[guard]` в `config.toml`;
   `[guard] never` — и «никогда» для сторожа, и «с подтверждением» для ручного снятия;
-- журнал — `guard.jsonl` в каталоге журналов rmon; история старого сторожа видна во вкладке «Журнал»;
+- журнал — `guard.jsonl` в каталоге журналов rmon, виден во вкладке «Журнал»;
 - упор в предел снятий (`limits`) — с уведомлением: прогоны перезапускаются быстрее, чем их снимают.
 - **автоочистка сирот** (`[guard.orphans]`, по умолчанию включена, 5 мин): сирота — то же правило,
   что у подозреваемых (`analyze::is_orphan`: dev-процесс, ppid 1, от `orphan_bytes`); если на каждом
@@ -69,7 +65,7 @@ scripts/              prepare-sidecar.mjs (CLI внутрь бандла), insta
   `History::slim`) → `analyze` → `Dashboard`. Окно и MCP-сервер берут `MonitorHandle`
   (`dashboard`, `details`, `kill`), CLI — разовый `Monitor::tick`. Своих циклов ни у кого нет.
 - `rmon_core::policy` — единственное место решения «можно ли снимать» (см. ниже).
-- `rmon_core::config` — настройки и все пути (журналы, конфиг, memory-guard) по ОС.
+- `rmon_core::config` — настройки и все пути (журналы, конфиг) по ОС.
 - `rmon_core::fmt` — «3,1 ГБ». Окно форматирует тем же правилом: `cargo test` пишет эталон
   `apps/rmon-app/src/bindings/format-cases.json`, `npm test` сверяет с ним `fmtBytes`.
 - TS-типы окна генерирует ts-rs из Rust (`apps/rmon-app/src/bindings/*.ts`), подписи
@@ -166,15 +162,14 @@ pub enum KillPolicy {
 }
 ```
 
-Правила — данные (`RuleSpec { name, exe?, path?, args? }`, регулярные выражения — та же форма,
-что у `memory-guard/config.json`), решение принимает `rmon_core::policy::Policy` в таком порядке:
+Правила — данные (`RuleSpec { name, exe?, path?, args? }`, регулярные выражения), решение принимает `rmon_core::policy::Policy` в таком порядке:
 1. pid ядра/init и сам rmon → `Protected`;
 2. процесс другого пользователя (мы не root) → `Protected` («нет прав»);
 3. встроенные «никогда» по ОС (на macOS: `/System`, `/usr/libexec`, `/usr/sbin`, `/sbin`,
    `/Library/Apple`, `kernel_task`/`launchd`/`WindowServer`/`loginwindow`, сторожа владельца) ∪
    `[[policy.protect]]` из конфига → `Protected`;
 4. встроенные «с подтверждением» (приложения владельца, `claude`, `mcode-engine`, утилиты `/bin` и
-   `/usr/bin`, любой `.app`) ∪ **весь `never` из `memory-guard/config.json`** ∪ `[[policy.confirm]]`
+   `/usr/bin`, любой `.app`) ∪ **весь `[guard] never`** ∪ `[[policy.confirm]]`
    → `Confirm`;
 5. иначе `Free`.
 
@@ -187,7 +182,7 @@ JSON в журнал (`rmon config` покажет путь; на macOS `~/Libra
 `cli` / `mcp` / `app`, причина, сколько освободили).
 
 Настройки — `~/.config/rmon/config.toml` (Windows: `%APPDATA%\rmon\config.toml`; env `RMON_CONFIG`):
-секции `[thresholds]`, `[[policy.protect]]`, `[[policy.confirm]]`, `[policy] use_memory_guard`,
+секции `[thresholds]`, `[[policy.protect]]`, `[[policy.confirm]]`, `[guard]`, `[app]`, `[logs]`,
 `[paths]`. Неизвестный ключ — ошибка (`rmon config` её покажет).
 
 ## Требования
@@ -202,9 +197,8 @@ JSON в журнал (`rmon config` покажет путь; на macOS `~/Libra
 
 ## Фазы
 
-1. **CORE** — `rmon-core`, `rmon-cli`. → [tasks/01-core-cli.md](tasks/01-core-cli.md) — сделано.
-2. **MCP** — `rmon-mcp`, `rmon mcp`, инструкция [CLAUDE_CODE.md](CLAUDE_CODE.md). → [tasks/02-mcp.md](tasks/02-mcp.md)
-3. **APP** — Tauri 2 вместо eframe (см. «Почему Tauri»), установка `scripts/install-macos.sh`.
-   → [tasks/03-app.md](tasks/03-app.md) — исходная постановка под egui, цели те же.
-4. **GUARD** — перенос memory-guard в rmon, уведомления, автозапуск при входе, вкладка «Настройки».
+1. **CORE** — `rmon-core`, `rmon-cli`.
+2. **MCP** — `rmon-mcp`, `rmon mcp`, инструкция [CLAUDE_CODE.md](CLAUDE_CODE.md).
+3. **APP** — Tauri 2 (см. «Почему Tauri»), установка `scripts/install-macos.sh`.
+4. **GUARD** — сторож памяти в приложении, уведомления, автозапуск при входе, вкладки «Сторож» и «Настройки».
 5. **PLATFORMS** — Linux и Windows: отложено, см. [ROADMAP.md](ROADMAP.md).

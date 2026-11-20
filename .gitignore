@@ -5,3 +5,6 @@
 apps/rmon-app/src-tauri/gen/
 apps/rmon-app/src-tauri/binaries/
 .claude/worktrees/
+
+# Личные заметки о передаче работы — только локально
+docs/HANDOFF.md
