@@ -211,7 +211,7 @@ mod imp {
     use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
     use windows_sys::Win32::System::Threading::{
         GetCurrentProcess, GetExitCodeProcess, GetProcessTimes, OpenProcess, OpenProcessToken, PROCESS_ACCESS_RIGHTS, PROCESS_NAME_WIN32,
-        PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE, PROCESS_VM_READ, QueryFullProcessImageNameW, TerminateProcess,
+        PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_TERMINATE, QueryFullProcessImageNameW, TerminateProcess,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{EnumWindows, GW_OWNER, GetWindow, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_CLOSE};
     use windows_sys::core::BOOL;
@@ -277,8 +277,9 @@ mod imp {
 
         fn read_process(&mut self, e: &Entry) -> Option<ProcessSample> {
             let pid = i32::try_from(e.pid).ok().filter(|&p| p > 0)?;
-            let handle = Handle::process(e.pid, PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_VM_READ)
-                .or_else(|| Handle::process(e.pid, PROCESS_QUERY_LIMITED_INFORMATION));
+            // С Windows 8.1 всем нужным вызовам (память, время, путь, командная строка, токен) хватает
+            // QUERY_LIMITED_INFORMATION; PROCESS_VM_READ не просим — его не дают чужим и защищённым.
+            let handle = Handle::process(e.pid, PROCESS_QUERY_LIMITED_INFORMATION);
             let times = handle.as_ref().and_then(|h| process_times(h.0));
             let started_at = times.map_or(0, |t| t.0);
             let key = (pid, started_at);

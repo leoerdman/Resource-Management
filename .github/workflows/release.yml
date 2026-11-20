@@ -51,7 +51,7 @@ jobs:
             args: --bundles appimage,deb
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # ubuntu-22.04: AppImage, собранный на старом glibc, запускается на большем числе дистрибутивов.
       - name: Системные библиотеки Tauri (Linux)
@@ -68,9 +68,9 @@ jobs:
         with:
           key: release-${{ matrix.target }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
           cache-dependency-path: apps/rmon-app/package-lock.json
 

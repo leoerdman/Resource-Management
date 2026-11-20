@@ -234,6 +234,8 @@ mod tests {
         let info = plat.process(pid).unwrap().unwrap();
         assert!(info.started_at > 0, "{info:?}");
         assert_eq!(info.uid, platform::current_uid(), "свой процесс: {info:?}");
+        assert!(info.footprint.is_some() && info.rss > 0, "память своего процесса читается: {info:?}");
+        assert!(info.exe.is_some() && info.args.len() >= 2, "путь и аргументы: {info:?}");
         let policy = policy_for(&info);
         assert!(policy.killable(), "{policy:?}");
         #[cfg(target_os = "macos")]

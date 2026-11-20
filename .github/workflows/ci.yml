@@ -2,6 +2,9 @@
 #
 # `cargo fmt --check` здесь нет намеренно: репозиторий отформатирован шире rustfmt по умолчанию
 # (rustfmt.toml нет, `cargo fmt --check` даёт ~100 диффов). Появится rustfmt.toml — добавить шаг.
+#
+# Node 24 (npm 11), а не 22: package-lock.json записан npm 11, и `npm ci` из npm 10 на нём
+# падает («Missing: @emnapi/core … from lock file» — необязательные peer-зависимости wasm-сборки vite).
 name: CI
 
 # Любая ветка: полосы гоняют CI на своих ветках до слияния в main.
@@ -30,7 +33,7 @@ jobs:
         os: [macos-latest, ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Системные библиотеки Tauri (Linux)
         if: runner.os == 'Linux'
@@ -44,9 +47,9 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
           cache-dependency-path: apps/rmon-app/package-lock.json
 
@@ -71,7 +74,7 @@ jobs:
     name: TS-типы совпадают с Rust
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # `cargo test -p rmon-core` пишет ts-rs типы, labels.json и format-cases.json
@@ -94,10 +97,10 @@ jobs:
       run:
         working-directory: apps/rmon-app
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
         with:
-          node-version: 22
+          node-version: 24
           cache: npm
           cache-dependency-path: apps/rmon-app/package-lock.json
       - run: npm ci
