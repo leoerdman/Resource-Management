@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::analyze::{Suspect, Thresholds, analyze, app_groups, growth_rates};
+use crate::analyze::{Suspect, Thresholds, analyze, app_groups, growth_rates, short_cmd};
 use crate::collect::Collector;
 use crate::config;
 use crate::error::{Error, Result};
@@ -261,10 +261,42 @@ impl Monitor {
         }
     }
 
+    /// Подробности процесса по итогу шага (для разовых прогонов, например `rmon why`).
+    pub fn details(&mut self, tick: &Tick, pid: i32) -> Option<ProcessDetails> {
+        let info = find(&tick.snapshot, pid, None)?;
+        let series = self.history.series(info);
+        let cwd = self.collector.cwd(info.pid).ok().flatten();
+        build_details(&tick.snapshot, &tick.dashboard, info, series, cwd)
+    }
+
     /// История анализа.
     pub fn history(&self) -> &History {
         &self.history
     }
+}
+
+fn find(snap: &Snapshot, pid: i32, started_at: Option<u64>) -> Option<&ProcessInfo> {
+    snap.processes.iter().find(|p| p.pid == pid && started_at.is_none_or(|s| s == p.started_at))
+}
+
+fn build_details(
+    snap: &Snapshot,
+    dash: &Dashboard,
+    info: &ProcessInfo,
+    series: Vec<(u64, u64)>,
+    cwd: Option<String>,
+) -> Option<ProcessDetails> {
+    let row = dash.processes.iter().find(|r| r.pid == info.pid && r.started_at == info.started_at)?.clone();
+    let descendants: Vec<ProcBrief> = snap.descendants(info.pid).into_iter().map(ProcBrief::from).collect();
+    Some(ProcessDetails {
+        row,
+        command_line: info.command_line(),
+        cwd,
+        ancestors: snap.ancestors(info.pid).into_iter().map(ProcBrief::from).collect(),
+        descendants_total: descendants.iter().map(|d| d.reclaim).sum(),
+        descendants,
+        series,
+    })
 }
 
 /// Аргументы, укороченные суммарно до `limit` символов (последний элемент — «…»).
@@ -290,13 +322,62 @@ pub fn limit_args(args: &[String], limit: usize) -> Vec<String> {
     out
 }
 
+/// Процесс коротко — для цепочки родителей и списка детей.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ProcBrief {
+    /// Идентификатор.
+    pub pid: i32,
+    /// Имя.
+    pub name: String,
+    /// Время запуска.
+    #[ts(type = "number")]
+    pub started_at: u64,
+    /// Память (footprint, иначе rss).
+    #[ts(type = "number")]
+    pub reclaim: u64,
+    /// Строка запуска, укороченная.
+    pub cmd: String,
+}
+
+impl From<&ProcessInfo> for ProcBrief {
+    fn from(p: &ProcessInfo) -> Self {
+        Self { pid: p.pid, name: p.name.clone(), started_at: p.started_at, reclaim: p.reclaim(), cmd: short_cmd(p) }
+    }
+}
+
+/// Всё о процессе: «кто это, откуда, чей и что тянет за собой».
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct ProcessDetails {
+    /// Строка как в сводке: рост, политика.
+    pub row: ProcessRow,
+    /// Полная строка запуска.
+    pub command_line: String,
+    /// Рабочий каталог — по нему видно, в каком проекте работает сессия.
+    pub cwd: Option<String>,
+    /// Родители: от непосредственного до init.
+    pub ancestors: Vec<ProcBrief>,
+    /// Потомки (дети, внуки…).
+    pub descendants: Vec<ProcBrief>,
+    /// Сумма памяти потомков.
+    #[ts(type = "number")]
+    pub descendants_total: u64,
+    /// Ряд памяти из истории анализа: [unix-секунды, байты].
+    #[ts(type = "Array<[number, number]>")]
+    pub series: Vec<(u64, u64)>,
+}
+
+/// Ряды памяти процессов: (pid, started_at) → [(t, bytes)].
+type SeriesMap = HashMap<(i32, u64), Vec<(u64, u64)>>;
+
 /// Последнее опубликованное состояние.
 #[derive(Default)]
 struct Published {
     dashboard: Option<Arc<Dashboard>>,
     snapshot: Option<Arc<Snapshot>>,
     /// Ряды памяти процессов из истории анализа: (pid, started_at) → [(t, bytes)].
-    series: Arc<HashMap<(i32, u64), Vec<(u64, u64)>>>,
+    series: Arc<SeriesMap>,
 }
 
 type Listener = Box<dyn Fn(&Arc<Dashboard>) + Send + Sync>;
@@ -329,6 +410,15 @@ impl MonitorHandle {
     pub fn target(&self, pid: i32, started_at: Option<u64>) -> Option<ProcessInfo> {
         let snap = self.snapshot()?;
         snap.processes.iter().find(|p| p.pid == pid && started_at.is_none_or(|s| s == p.started_at)).cloned()
+    }
+
+    /// Подробности процесса по последнему снимку. `started_at = None` — любой процесс с этим pid.
+    pub fn details(&self, pid: i32, started_at: Option<u64>) -> Option<ProcessDetails> {
+        let snap = self.snapshot()?;
+        let dash = self.dashboard()?;
+        let info = find(&snap, pid, started_at)?;
+        let series = self.series(info.pid, info.started_at);
+        build_details(&snap, &dash, info, series, self.cwd(info.pid))
     }
 
     /// Рабочий каталог процесса (свежее чтение платформы).

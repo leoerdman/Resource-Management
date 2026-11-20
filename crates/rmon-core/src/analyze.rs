@@ -29,6 +29,23 @@ pub enum SuspectKind {
     Zombie,
 }
 
+impl SuspectKind {
+    /// Все виды — для словаря подписей окна.
+    pub const ALL: [Self; 6] = [Self::Hog, Self::Growing, Self::Orphan, Self::Idle, Self::Duplicate, Self::Zombie];
+
+    /// Подпись для человека.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Hog => "Большой",
+            Self::Growing => "Растёт",
+            Self::Orphan => "Сирота",
+            Self::Idle => "Простаивает",
+            Self::Duplicate => "Дубль",
+            Self::Zombie => "Зомби",
+        }
+    }
+}
+
 /// Подозреваемый.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export)]
@@ -151,9 +168,9 @@ pub fn analyze(history: &History, th: &Thresholds) -> Vec<Suspect> {
         }
     }
 
-    // Дубли: одинаковые dev-команды. Копия лишняя, если служит тому же, кому и другая
-    // (тот же родитель) или никому (сирота). Копии с разными живыми родителями — это
-    // каждая своя сессия (MCP-сервер на каждую сессию claude) и дублем не считаются.
+    // Дубли: брошенные копии одной dev-команды — сироты (родитель умер, ppid 1).
+    // Копии под живым родителем — его дело: пулы воркеров, сессии Claude Code внутри
+    // приложения Claude, MCP-сервер на каждую сессию. Их дублями не считаем.
     let mut dup: HashMap<String, Vec<&ProcessInfo>> = HashMap::new();
     for p in &last.processes {
         if !p.args.is_empty() && is_dev(&p.name) {
@@ -235,20 +252,11 @@ pub fn analyze(history: &History, th: &Thresholds) -> Vec<Suspect> {
     }
 
     for (cmd, copies) in &dup {
-        if copies.len() < th.duplicate_count {
+        if copies.iter().filter(|p| p.ppid == 1).count() < th.duplicate_count {
             continue;
         }
-        let mut by_parent: HashMap<i32, Vec<&ProcessInfo>> = HashMap::new();
-        for p in copies {
-            by_parent.entry(p.ppid).or_default().push(p);
-        }
-        // В каждой семье оставляем самую новую копию; у сирот (ppid 1) — ни одной.
-        let mut extra: Vec<&ProcessInfo> = Vec::new();
-        for (ppid, mut family) in by_parent {
-            family.sort_by_key(|p| p.started_at);
-            let keep = usize::from(ppid > 1);
-            extra.extend(family.iter().take(family.len().saturating_sub(keep)));
-        }
+        let mut extra: Vec<&ProcessInfo> = copies.iter().copied().filter(|p| p.ppid == 1).collect();
+        extra.sort_by_key(|p| p.started_at);
         if extra.len() < 2 {
             continue;
         }
@@ -266,7 +274,7 @@ pub fn analyze(history: &History, th: &Thresholds) -> Vec<Suspect> {
                 kind: SuspectKind::Duplicate,
                 score: (30.0 + 40.0 * (total as f64 / (4.0 * GIB as f64)).min(1.0)) as u8,
                 reason: format!(
-                    "{} лишних копий «{short}» из {} (вместе {}), эта — {}",
+                    "{} брошенных копий «{short}» из {} (вместе {}), эта — {}",
                     extra.len(),
                     copies.len(),
                     fmt::bytes(total),
@@ -334,9 +342,10 @@ mod tests {
                     p(10, "node", 3 * GIB, 500, &["node", "big.js"]),
                     p(11, "node", 200 * MIB + i * 10 * MIB, 500, &["node", "leak.js"]),
                     p(12, "bun", 100 * MIB, 1, &["bun", "x.ts"]),
-                    p(13, "node", 30 * MIB, 500, &["node", "mcp.js"]),
-                    p(14, "node", 30 * MIB, 500, &["node", "mcp.js"]),
-                    p(15, "node", 30 * MIB, 500, &["node", "mcp.js"]),
+                    p(13, "node", 30 * MIB, 1, &["node", "mcp.js"]),
+                    p(14, "node", 30 * MIB, 1, &["node", "mcp.js"]),
+                    p(15, "node", 30 * MIB, 1, &["node", "mcp.js"]),
+                    p(16, "node", 30 * MIB, 500, &["node", "mcp.js"]),
                 ],
             ));
         }
@@ -347,20 +356,24 @@ mod tests {
         assert_eq!(kind(12), Some(SuspectKind::Orphan));
         assert_eq!(kind(13), Some(SuspectKind::Duplicate));
         assert_eq!(kind(14), Some(SuspectKind::Duplicate));
-        assert_eq!(kind(15), None, "самую новую копию оставляем");
+        assert_eq!(kind(15), Some(SuspectKind::Duplicate));
+        assert_eq!(kind(16), None, "копия под живым родителем — не дубль");
         assert_eq!(s.iter().find(|x| x.pid == 13).unwrap().group, s.iter().find(|x| x.pid == 14).unwrap().group);
         assert!(s[0].score >= s[s.len() - 1].score);
         assert!(s.iter().find(|x| x.pid == 11).unwrap().reason.contains("растёт"));
     }
 
     #[test]
-    fn sessions_with_own_parents_are_not_duplicates() {
+    fn live_copies_are_not_duplicates() {
         let mut h = History::default();
-        // Три MCP-сервера, у каждого своя живая сессия claude — это не дубли.
+        // MCP-серверы у своих сессий и сессии Claude Code под одним приложением — не дубли.
         h.push(snap(1, vec![
             p(20, "node", 80 * MIB, 101, &["node", "mcp.js"]),
             p(21, "node", 80 * MIB, 102, &["node", "mcp.js"]),
             p(22, "node", 80 * MIB, 103, &["node", "mcp.js"]),
+            p(23, "claude", 300 * MIB, 46516, &["claude", "--output-format", "stream-json"]),
+            p(24, "claude", 300 * MIB, 46516, &["claude", "--output-format", "stream-json"]),
+            p(25, "claude", 300 * MIB, 46516, &["claude", "--output-format", "stream-json"]),
         ]));
         assert!(analyze(&h, &Thresholds::default()).iter().all(|x| x.kind != SuspectKind::Duplicate));
     }

@@ -25,6 +25,9 @@ pub enum Pressure {
 }
 
 impl Pressure {
+    /// Все уровни — для словаря подписей окна.
+    pub const ALL: [Self; 3] = [Self::Normal, Self::Warning, Self::Critical];
+
     /// Уровень ядра: 1 — норма, 2 — предупреждение, 4 — критично.
     pub fn from_level(level: i32) -> Self {
         match level {
@@ -65,6 +68,9 @@ pub enum ProcState {
 }
 
 impl ProcState {
+    /// Все состояния — для словаря подписей окна.
+    pub const ALL: [Self; 5] = [Self::Running, Self::Sleeping, Self::Stopped, Self::Zombie, Self::Unknown];
+
     /// Слово для человека.
     pub fn as_str(self) -> &'static str {
         match self {

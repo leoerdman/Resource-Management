@@ -51,13 +51,13 @@ impl MacOsPlatform {
     }
 
     fn read_process(&mut self, pid: i32) -> Option<ProcessSample> {
-        let bsd = bsd_info(pid)?;
-        let key = (pid, bsd.pbi_start_tvsec);
+        let id = identity(pid)?;
+        let key = (pid, id.started_at);
         let st = match self.cache.get(&key) {
             // Пустые аргументы могли быть гонкой с exec — перечитываем.
             Some(st) if !st.args.is_empty() || st.exe.is_none() => st.clone(),
             _ => {
-                let name = proc_name(pid).unwrap_or_else(|| cstr(&bsd.pbi_name).or_else(|| cstr(&bsd.pbi_comm)).unwrap_or_default());
+                let name = proc_name(pid).unwrap_or_else(|| id.name.clone());
                 let exe = proc_path(pid);
                 let args = proc_args(pid);
                 let app_group = app_group(&name, exe.as_deref());
@@ -80,7 +80,7 @@ impl MacOsPlatform {
             .map_or(0, |t| self.ticks_to_ns(t));
         let threads = task.as_ref().map_or(0, |t| t.pti_threadnum.max(0) as u32);
 
-        let state = match bsd.pbi_status {
+        let state = match id.status {
             libc::SRUN => ProcState::Running,
             1 | 3 => ProcState::Sleeping, // SIDL, SSLEEP
             libc::SSTOP => ProcState::Stopped,
@@ -90,17 +90,17 @@ impl MacOsPlatform {
         Some(ProcessSample {
             info: ProcessInfo {
                 pid,
-                ppid: bsd.pbi_ppid as i32,
+                ppid: id.ppid,
                 name,
                 exe,
                 args,
-                uid: bsd.pbi_uid,
+                uid: id.uid,
                 footprint,
                 rss,
                 cpu_pct: 0.0,
                 threads,
                 state,
-                started_at: bsd.pbi_start_tvsec,
+                started_at: id.started_at,
                 app_group,
             },
             cpu_time_ns,
@@ -166,8 +166,8 @@ impl Platform for MacOsPlatform {
 
     fn process(&mut self, pid: i32) -> Result<Option<ProcessInfo>> {
         // Для сверки личности перед снятием — всегда свежее чтение, мимо кэша.
-        if let Some(b) = bsd_info(pid) {
-            self.cache.remove(&(pid, b.pbi_start_tvsec));
+        if let Some(id) = identity(pid) {
+            self.cache.remove(&(pid, id.started_at));
         }
         Ok(self.read_process(pid).map(|s| s.info))
     }
@@ -200,7 +200,7 @@ impl Platform for MacOsPlatform {
         // SAFETY: сигнал 0 ничего не посылает, только проверяет существование.
         if unsafe { libc::kill(pid, 0) } == 0 {
             // Зомби ещё «жив» для kill(0), но память уже отдал.
-            return Ok(!matches!(bsd_info(pid).map(|b| b.pbi_status), Some(libc::SZOMB)));
+            return Ok(!matches!(identity(pid).map(|i| i.status), Some(libc::SZOMB)));
         }
         Ok(std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM))
     }
@@ -230,6 +230,57 @@ fn pidinfo<T>(pid: i32, flavor: libc::c_int) -> Option<T> {
     let n = unsafe { libc::proc_pidinfo(pid, flavor, 0, v.as_mut_ptr().cast(), size) };
     // SAFETY: n == size — структура заполнена; это POD из целых.
     (n == size).then(|| unsafe { v.assume_init() })
+}
+
+/// Личность процесса: родитель, владелец, состояние, время запуска, короткое имя.
+struct Identity {
+    ppid: i32,
+    uid: u32,
+    status: u32,
+    started_at: u64,
+    name: String,
+}
+
+/// Свой процесс — `PROC_PIDTBSDINFO`. Чужой (root, `_windowserver`) его не отдаёт, но
+/// `PROC_PIDT_SHORTBSDINFO` и `sysctl KERN_PROC_PID` доступны без прав — так процессы
+/// других пользователей остаются в снимке (память у них `None`, как в `ps` без root).
+fn identity(pid: i32) -> Option<Identity> {
+    if let Some(b) = bsd_info(pid) {
+        return Some(Identity {
+            ppid: b.pbi_ppid as i32,
+            uid: b.pbi_uid,
+            status: b.pbi_status,
+            started_at: b.pbi_start_tvsec,
+            name: cstr(&b.pbi_name).or_else(|| cstr(&b.pbi_comm)).unwrap_or_default(),
+        });
+    }
+    let short: libc::proc_bsdshortinfo = pidinfo(pid, PROC_PIDT_SHORTBSDINFO)?;
+    Some(Identity {
+        ppid: short.pbsi_ppid as i32,
+        uid: short.pbsi_uid,
+        status: short.pbsi_status,
+        started_at: start_time_sysctl(pid).unwrap_or(0),
+        name: cstr(&short.pbsi_comm).unwrap_or_default(),
+    })
+}
+
+/// `PROC_PIDT_SHORTBSDINFO` из `<sys/proc_info.h>` (в libc нет константы).
+const PROC_PIDT_SHORTBSDINFO: libc::c_int = 13;
+/// `sizeof(struct kinfo_proc)` на 64-битной macOS.
+const KINFO_PROC_SIZE: usize = 648;
+
+/// Время запуска из `kinfo_proc`: `kp_proc.p_un.__p_starttime` — первое поле структуры.
+fn start_time_sysctl(pid: i32) -> Option<u64> {
+    let mut mib = [libc::CTL_KERN, libc::KERN_PROC, libc::KERN_PROC_PID, pid];
+    let mut buf = vec![0u64; KINFO_PROC_SIZE / 8];
+    let mut size = KINFO_PROC_SIZE;
+    // SAFETY: буфер KINFO_PROC_SIZE байт, выровнен по 8; ядро пишет не больше size.
+    let rc = unsafe { libc::sysctl(mib.as_mut_ptr(), 4, buf.as_mut_ptr().cast(), &mut size, std::ptr::null_mut(), 0) };
+    if rc != 0 || size < 16 {
+        return None;
+    }
+    // timeval { tv_sec: i64, tv_usec: i32 } — tv_sec в первых 8 байтах.
+    u64::try_from(buf[0] as i64).ok().filter(|&s| s > 0)
 }
 
 fn bsd_info(pid: i32) -> Option<libc::proc_bsdinfo> {
@@ -323,4 +374,21 @@ fn sysctl_u64(name: &str) -> Result<u64> {
 
 fn sysctl_i32(name: &str) -> Result<i32> {
     sysctl_struct::<i32>(name)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sees_foreign_processes() {
+        let mut p = MacOsPlatform::new().unwrap();
+        let launchd = p.process(1).unwrap().expect("launchd виден без прав");
+        assert_eq!(launchd.uid, 0);
+        assert!(launchd.started_at > 0);
+        let me = p.process(std::process::id() as i32).unwrap().unwrap();
+        assert!(me.footprint.is_some());
+        let start = start_time_sysctl(std::process::id() as i32).unwrap();
+        assert_eq!(start, me.started_at, "оба пути дают одно время запуска");
+    }
 }

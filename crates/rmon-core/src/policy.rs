@@ -37,7 +37,7 @@ impl KillPolicy {
         match self {
             Self::Protected(_) => "защищён",
             Self::Confirm(_) => "с подтверждением",
-            Self::Free => "можно",
+            Self::Free => "можно снять",
         }
     }
 

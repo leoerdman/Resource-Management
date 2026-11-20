@@ -10,6 +10,7 @@
 pub mod analyze;
 pub mod collect;
 pub mod config;
+pub mod contract;
 pub mod error;
 pub mod fmt;
 pub mod group;

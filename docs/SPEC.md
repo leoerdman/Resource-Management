@@ -23,16 +23,34 @@
 
 ```
 Cargo workspace (edition 2024)
-crates/rmon-core   библиотека: сбор, история, анализ, защитный слой снятия
-crates/rmon-cli    бинарь `rmon`: status / ps / suggest / kill / mcp, у всех --json
-crates/rmon-mcp    MCP-сервер (stdio) поверх rmon-core; запускается как `rmon mcp`
-apps/rmon-app      окно (eframe/egui) + иконка в строке меню; сборка в .app скриптом
+crates/rmon-core      библиотека: сбор (Platform), история, анализ, политика, снятие, Monitor, конфиг
+crates/rmon-cli       бинарь `rmon`: status / ps / suggest / why / kill / config / mcp, у всех --json
+crates/rmon-mcp       MCP-сервер (stdio) поверх rmon-core; запускается как `rmon mcp`
+apps/rmon-app         Tauri 2: окно (React + Vite, src/) и значок в строке меню (src-tauri/)
+scripts/              prepare-sidecar.mjs (CLI внутрь бандла), install-macos.sh
+.github/workflows/    CI на macOS / Linux / Windows, релиз .dmg / .msi / .AppImage
 ```
 
-Платформа — за трейтом `Platform` в `rmon-core` (`platform/macos.rs` — сейчас; `linux.rs`,
-`windows.rs` — потом). Всё выше трейта платформонезависимо. На macOS — прямые вызовы
-`libproc` / `mach` / `sysctl` через `libc` (+ `mach2` при необходимости), без `sysinfo`:
-он не даёт `phys_footprint`, а именно его показывает Activity Monitor в столбце «Память».
+**Почему Tauri, а не egui** (решение 2026-11-20): владельцу нужен мультиплатформенный
+устанавливаемый апп. Tauri даёт значок в строке меню, установщики `.dmg`/`.msi`/`.AppImage`/`.deb`
+и CLI-sidecar внутри бандла на всех трёх ОС, а интерфейс на React собирается и меняется быстрее,
+чем на egui. Цена — процесс WebView (~50 МБ); вся логика при этом остаётся в Rust.
+
+**Один источник истины:**
+- `rmon_core::monitor` — единственный цикл сбора: снимок → история анализа (облегчённая,
+  `History::slim`) → `analyze` → `Dashboard`. Окно и MCP-сервер берут `MonitorHandle`
+  (`dashboard`, `details`, `kill`), CLI — разовый `Monitor::tick`. Своих циклов ни у кого нет.
+- `rmon_core::policy` — единственное место решения «можно ли снимать» (см. ниже).
+- `rmon_core::config` — настройки и все пути (журналы, конфиг, memory-guard) по ОС.
+- `rmon_core::fmt` — «3,1 ГБ». Окно форматирует тем же правилом: `cargo test` пишет эталон
+  `apps/rmon-app/src/bindings/format-cases.json`, `npm test` сверяет с ним `fmtBytes`.
+- TS-типы окна генерирует ts-rs из Rust (`apps/rmon-app/src/bindings/*.ts`), подписи
+  перечислений — `bindings/labels.json`. CI падает, если сгенерированное не закоммичено.
+
+Платформа — за трейтом `Platform` в `rmon-core`: `platform/macos.rs` (libproc / mach / sysctl
+через `libc`, без `sysinfo` — он не даёт `phys_footprint`), `platform/linux.rs` (`/proc`, PSI),
+`platform/windows.rs` (`windows-sys`). Чужие процессы без прав остаются в снимке с `footprint = None`
+(на macOS — через `PROC_PIDT_SHORTBSDINFO` и `sysctl KERN_PROC_PID`).
 
 ## Модель данных (контракт для всех полос)
 
@@ -86,6 +104,9 @@ pub enum SuspectKind { Hog, Growing, Orphan, Idle, Duplicate, Zombie }
 pub struct Suspect {
     pub pid: i32, pub kind: SuspectKind,
     pub score: u8,                 // 0–100, по нему сортировка
+    pub name: String, pub app_group: String, pub started_at: u64,
+    pub cmd: String,               // строка запуска ≤ 200 символов
+    pub group: Option<String>,     // общий ключ у брошенных копий одной команды
     pub reason: String,            // по-русски, человеку: «node 3,1 ГБ, растёт 40 МБ/мин 6 мин подряд»
     pub reclaim: u64,              // сколько освободится (footprint, иначе rss)
     pub policy: KillPolicy,        // см. ниже
@@ -97,7 +118,10 @@ pub struct Suspect {
 - **Orphan** — dev-процесс (`node`, `bun`, `python`, `tsgo`, `claude`, `cargo`, `rustc`…) с `ppid == 1`,
   то есть родитель умер, а он остался.
 - **Idle** — большой и почти без CPU долго (зависшая команда, забытый REPL/сервер).
-- **Duplicate** — много одинаковых строк запуска (например, 6 одинаковых MCP-серверов от старых сессий).
+- **Duplicate** — брошенные копии одной dev-команды: ≥ 3 одинаковых строки запуска у сирот
+  (например, MCP-серверы, пережившие свои сессии). Копии под живым родителем дублями **не** считаются:
+  это пулы воркеров, сессии Claude Code внутри приложения Claude, MCP-сервер на каждую сессию.
+  У дублей общий `group` — окно сворачивает их в одну строку с «Снять все».
 - **Zombie** — `ProcState::Zombie`.
 
 Суммарно по приложениям — `AppGroup { name, pids, footprint, count }`.
@@ -113,22 +137,44 @@ pub enum KillPolicy {
 }
 ```
 
-Снятие: сверить `(pid, started_at, args)` со снимком (pid мог смениться) → SIGTERM → ожидание
-(по умолчанию 5 с) → SIGKILL, если ещё жив. Каждое действие и отказ — строкой JSON в
-`~/Library/Logs/rmon/actions.jsonl` (кто попросил: `cli` / `mcp` / `app`, причина, сколько освободили).
-Списки — в `rmon-core`, одним местом; можно расширить конфигом `~/.config/rmon/config.toml`.
+Правила — данные (`RuleSpec { name, exe?, path?, args? }`, регулярные выражения — та же форма,
+что у `memory-guard/config.json`), решение принимает `rmon_core::policy::Policy` в таком порядке:
+1. pid ядра/init и сам rmon → `Protected`;
+2. процесс другого пользователя (мы не root) → `Protected` («нет прав»);
+3. встроенные «никогда» по ОС (на macOS: `/System`, `/usr/libexec`, `/usr/sbin`, `/sbin`,
+   `/Library/Apple`, `kernel_task`/`launchd`/`WindowServer`/`loginwindow`, сторожа владельца) ∪
+   `[[policy.protect]]` из конфига → `Protected`;
+4. встроенные «с подтверждением» (приложения владельца, `claude`, `mcode-engine`, утилиты `/bin` и
+   `/usr/bin`, любой `.app`) ∪ **весь `never` из `memory-guard/config.json`** ∪ `[[policy.confirm]]`
+   → `Confirm`;
+5. иначе `Free`.
+
+Так «никогда» сторожа у rmon не мягче: сторож не трогает их автоматически, rmon — без явного
+согласия человека. Конфиг может только ужесточить политику — ключа «освободить» в нём нет.
+
+Снятие: сверить `(pid, started_at, args)` со свежим чтением (pid мог смениться) → SIGTERM → ожидание
+(по умолчанию 5 с) → повторная сверка → SIGKILL, если ещё жив. Каждое действие и отказ — строкой
+JSON в журнал (`rmon config` покажет путь; на macOS `~/Library/Logs/rmon/actions.jsonl`; кто попросил:
+`cli` / `mcp` / `app`, причина, сколько освободили).
+
+Настройки — `~/.config/rmon/config.toml` (Windows: `%APPDATA%\rmon\config.toml`; env `RMON_CONFIG`):
+секции `[thresholds]`, `[[policy.protect]]`, `[[policy.confirm]]`, `[policy] use_memory_guard`,
+`[paths]`. Неизвестный ключ — ошибка (`rmon config` её покажет).
 
 ## Требования
 
 - Снимок ~800 процессов < 100 мс; `rmon status` целиком < 300 мс.
 - CLI: RSS < 30 МБ. Окно: RSS < 100 МБ, CPU в покое < 2 % при обновлении раз в 2 с.
 - Без прав root; что недоступно — `None`, а не падение.
-- Проект не должен сам стать «хавающим память» процессом.
+- Проект не должен сам стать «хавающим память» процессом: окно получает сводку через Tauri
+  `Channel` и только пока видно; значок трея перерисовывается, лишь когда изменилось видимое.
+- CLI: коды выхода 0 — успех, 1 — ошибка, 2 — снятие запрещено, 3 — нужно `--confirm`,
+  4 — процесс не найден/завершился/подменился.
 
-## Фазы (полосы M Code)
+## Фазы
 
-1. **CORE** — workspace, `rmon-core` (macOS), `rmon-cli`: `status`, `ps`, `suggest`, `kill`. → [tasks/01-core-cli.md](tasks/01-core-cli.md)
-2. **MCP** — `rmon-mcp`, `rmon mcp`, чтение журнала `memory-guard`, инструкция подключения к Claude Code.
-3. **APP** — окно на eframe, иконка давления в строке меню, `scripts/bundle-macos.sh` → `dist/Resource Monitor.app`.
-
-Фазы 2 и 3 зависят только от публичного API `rmon-core` и могут идти параллельно после фазы 1.
+1. **CORE** — `rmon-core`, `rmon-cli`. → [tasks/01-core-cli.md](tasks/01-core-cli.md) — сделано.
+2. **MCP** — `rmon-mcp`, `rmon mcp`, инструкция [CLAUDE_CODE.md](CLAUDE_CODE.md). → [tasks/02-mcp.md](tasks/02-mcp.md)
+3. **APP** — Tauri 2 вместо eframe (см. «Почему Tauri»), установка `scripts/install-macos.sh`.
+   → [tasks/03-app.md](tasks/03-app.md) — исходная постановка под egui, цели те же.
+4. **PLATFORMS** — Linux и Windows за трейтом `Platform`, CI и релизы на трёх ОС.

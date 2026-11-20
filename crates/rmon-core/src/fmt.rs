@@ -3,26 +3,26 @@
 //! Один источник правды для `reason` подозреваемых и для таблиц CLI: «3,1 ГБ» пишется
 //! одним и тем же кодом везде.
 
-use crate::model::{GIB, KIB, MIB};
+use crate::model::{KIB, MIB};
 
-const UNITS: [(&str, u64); 4] = [
-    ("ТБ", GIB * 1024),
-    ("ГБ", GIB),
-    ("МБ", MIB),
-    ("КБ", KIB),
-];
+const UNITS: [&str; 5] = ["Б", "КБ", "МБ", "ГБ", "ТБ"];
 
 /// Размер человеку: «3,1 ГБ», «412 МБ», «980 КБ», «512 Б».
+///
+/// Правило (оно же в окне — `apps/rmon-app/src/format.ts`, сверяется тестом по
+/// `bindings/format-cases.json`, который пишет [`crate::contract`]): основание 1024;
+/// единица меняется, когда округлённое значение дошло бы до 1000 («1 ГБ», а не «1003 МБ»
+/// и не «1000 МБ»); от 100 — целое,
+/// ниже — один знак после запятой, «,0» отбрасывается.
 pub fn bytes(n: u64) -> String {
-    if n < KIB {
-        return format!("{n} Б");
+    let mut v = n as f64;
+    let mut unit = 0;
+    while v >= 999.5 && unit < UNITS.len() - 1 {
+        v /= 1024.0;
+        unit += 1;
     }
-    for (suffix, scale) in UNITS {
-        if n >= scale {
-            return format!("{} {suffix}", scaled(n, scale));
-        }
-    }
-    format!("{n} Б")
+    let body = if unit == 0 || v >= 100.0 { format!("{}", v.round() as u64) } else { decimal1(v) };
+    format!("{body} {}", UNITS[unit])
 }
 
 /// Скорость роста: «40,0 МБ/мин».
@@ -57,17 +57,7 @@ pub fn percent(value: f64) -> String {
     format!("{} %", decimal1(value))
 }
 
-fn scaled(n: u64, scale: u64) -> String {
-    let tenths = (u128::from(n) * 10 + u128::from(scale / 2)) / u128::from(scale);
-    let whole = tenths / 10;
-    let frac = tenths % 10;
-    if frac == 0 {
-        whole.to_string()
-    } else {
-        format!("{whole},{frac}")
-    }
-}
-
+/// Один знак после запятой: десятые — `round(v * 10)`, ровно как `Math.round` в окне.
 fn decimal1(value: f64) -> String {
     let tenths = (value * 10.0).round().max(0.0) as u64;
     let whole = tenths / 10;
@@ -82,6 +72,7 @@ fn decimal1(value: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::GIB;
 
     #[test]
     fn prints_gigabytes_with_comma() {
@@ -94,7 +85,9 @@ mod tests {
     #[test]
     fn rounds_to_nearest_tenth() {
         assert_eq!(bytes(1_073_741_824 + 100), "1 ГБ");
-        assert_eq!(bytes(3 * GIB / 10), "307,2 МБ");
+        assert_eq!(bytes(3 * GIB / 10), "307 МБ");
+        assert_eq!(bytes(1003 * MIB), "1 ГБ");
+        assert_eq!(bytes(99 * MIB + 512 * KIB), "99,5 МБ");
         assert_eq!(bytes(24 * GIB), "24 ГБ");
     }
 
