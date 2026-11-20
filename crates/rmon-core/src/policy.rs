@@ -101,49 +101,59 @@ fn spec(name: &str, exe: Option<&str>, path: Option<&str>, args: Option<&str>) -
 
 /// Встроенные «никогда» для текущей ОС.
 pub fn builtin_protect() -> Vec<RuleSpec> {
+    builtin_protect_for(std::env::consts::OS)
+}
+
+/// Встроенные «с подтверждением» для текущей ОС: приложения владельца и его агенты.
+pub fn builtin_confirm() -> Vec<RuleSpec> {
+    builtin_confirm_for(std::env::consts::OS)
+}
+
+/// Встроенные «никогда» для ОС по имени из `std::env::consts::OS` — так правила всех ОС
+/// проверяются тестами на любой машине.
+fn builtin_protect_for(os: &str) -> Vec<RuleSpec> {
     let mut v = vec![
         spec("сам rmon", None, Some(r"/Resource Monitor\.app/|(^|[/\\])rmon-app(\.exe)?$"), None),
         spec("сам сторож памяти", None, None, Some(r"memory-guard/guard\.ts")),
         spec("хуки сторожа машины", None, None, Some(r"Hooks/machine-guard/")),
     ];
-    if cfg!(target_os = "macos") {
-        v.extend([
+    match os {
+        "macos" => v.extend([
             spec("системная служба macOS", None, Some(r"^/(System|usr/libexec|usr/sbin|sbin|Library/Apple)/"), None),
             spec("ядро и графика macOS", Some(r"^(kernel_task|launchd|WindowServer|loginwindow)$"), None, None),
-        ]);
-    } else if cfg!(windows) {
-        v.extend([
+        ]),
+        "windows" => v.extend([
             spec("системная служба Windows", None, Some(r"(?i)^[a-z]:\\Windows\\"), None),
+            // Процессы без прочитанного пути (защищённые, чужие) узнаются по имени.
             spec(
                 "ядро и сеанс Windows",
-                Some(r"(?i)^(System|Registry|Secure System|smss|csrss|wininit|winlogon|services|lsass|svchost|dwm|fontdrvhost|MsMpEng)(\.exe)?$"),
+                Some(r"(?i)^(System|Registry|Secure System|Memory Compression|smss|csrss|wininit|winlogon|services|lsass|lsaiso|svchost|dwm|fontdrvhost|sihost|ctfmon|conhost|audiodg|spoolsv|MsMpEng|NisSrv|SecurityHealthService)(\.exe)?$"),
                 None,
                 None,
             ),
-        ]);
-    } else {
-        v.extend([
-            spec("системная служба Linux", None, Some(r"^/(usr/lib/systemd|lib/systemd|usr/libexec|usr/sbin|sbin)/"), None),
+        ]),
+        _ => v.extend([
+            spec("системная служба Linux", None, Some(r"^/(usr/lib/systemd|lib/systemd|usr/libexec|usr/sbin|sbin|usr/lib/polkit-1|usr/lib/snapd)/"), None),
             spec(
                 "init, графика и сеанс Linux",
-                Some(r"^(systemd|init|kthreadd|Xorg|Xwayland|gnome-shell|kwin_wayland|kwin_x11|plasmashell|sddm|gdm|gdm3|lightdm|dbus-daemon|dbus-broker|pipewire|wireplumber|NetworkManager)$"),
+                Some(r"^(systemd|init|kthreadd|Xorg|Xwayland|gnome-shell|gnome-session-binary|mutter|kwin_wayland|kwin_x11|plasmashell|ksmserver|kded5|kded6|sway|Hyprland|weston|cosmic-comp|sddm|gdm|gdm3|lightdm|dbus-daemon|dbus-broker|pipewire|pipewire-pulse|wireplumber|pulseaudio|polkitd|NetworkManager|snapd)$"),
                 None,
                 None,
             ),
-        ]);
+        ]),
     }
     v
 }
 
-/// Встроенные «с подтверждением» для текущей ОС: приложения владельца и его агенты.
-pub fn builtin_confirm() -> Vec<RuleSpec> {
+/// Встроенные «с подтверждением» для ОС по имени из `std::env::consts::OS`.
+fn builtin_confirm_for(os: &str) -> Vec<RuleSpec> {
     let mut v = vec![
         spec("сессия Claude Code", Some(r"^claude(\.exe)?$"), None, None),
         spec("движок M Code", Some(r"^mcode(-engine)?(\.exe)?$"), None, None),
         spec("движок M Code", None, None, Some(r"(^|/)mcode-engine(\s|$)")),
     ];
-    if cfg!(target_os = "macos") {
-        v.extend([
+    match os {
+        "macos" => v.extend([
             spec("Claude и его хелперы", None, Some(r"/[Cc]laude\.app/"), None),
             spec("M Code Desktop", None, Some(r"/M Code Desktop[^/]*\.app/"), None),
             spec("Telegram", None, Some(r"/Telegram[^/]*\.app/"), None),
@@ -156,25 +166,48 @@ pub fn builtin_confirm() -> Vec<RuleSpec> {
             spec("редактор", None, Some(r"/(Visual Studio Code|Cursor|Windsurf|Zed|Xcode)[^/]*\.app/"), None),
             spec("системная утилита", None, Some(r"^/(usr/bin|bin)/"), None),
             spec("приложение", None, Some(r"\.app/"), None),
-        ]);
-    } else if cfg!(windows) {
-        v.extend([
-            spec("оболочка Windows", Some(r"(?i)^explorer(\.exe)?$"), None, None),
-            spec("приложение владельца", Some(r"(?i)^(chrome|msedge|firefox|brave|opera|Code|Cursor|Windsurf|Zed|Telegram|Claude)(\.exe)?$"), None, None),
-        ]);
-    } else {
-        v.extend([
+        ]),
+        "windows" => v.extend([
+            spec("оболочка Windows", Some(r"(?i)^(explorer|ShellExperienceHost|StartMenuExperienceHost|SearchHost|TextInputHost)(\.exe)?$"), None, None),
+            spec("терминал", Some(r"(?i)^(WindowsTerminal|OpenConsole|cmd|powershell|pwsh|wsl|wslhost|bash)(\.exe)?$"), None, None),
+            spec("браузер", Some(r"(?i)^(chrome|msedge|msedgewebview2|firefox|brave|opera|vivaldi|browser|arc|zen)(\.exe)?$"), None, None),
             spec(
                 "приложение владельца",
-                Some(r"^(chrome|chromium|google-chrome|firefox|brave|opera|code|cursor|windsurf|zed|telegram-desktop|Telegram|claude-desktop)$"),
+                Some(r"(?i)^(Code|Cursor|Windsurf|Zed|Telegram|Claude|M Code Desktop|Slack|Discord|ms-teams|Teams|Spotify|Obsidian|Notion|thunderbird|OUTLOOK|WINWORD|EXCEL|POWERPNT)(\.exe)?$"),
                 None,
                 None,
             ),
-            spec("системная утилита", None, Some(r"^/(usr/bin|bin)/"), None),
-        ]);
+            // Приложения Microsoft Store.
+            spec("приложение", None, Some(r"(?i)\\WindowsApps\\"), None),
+        ]),
+        _ => v.extend([
+            spec(
+                "браузер",
+                Some(r"^(chrome|chromium|chromium-browser|google-chrome|firefox|firefox-bin|brave|opera|vivaldi-bin|msedge|zen|zen-bin)$"),
+                None,
+                None,
+            ),
+            spec(
+                "приложение владельца",
+                Some(r"^(code|cursor|windsurf|zed|zed-editor|telegram-desktop|Telegram|claude-desktop|slack|discord|Discord|spotify|obsidian|thunderbird|teams-for-linux)$"),
+                None,
+                None,
+            ),
+            // Оболочки и терминалы: снять — потерять всё, что в них идёт. Утилиты /usr/bin не
+            // трогаем целиком, как на macOS: на Linux там же node, python и прочие dev-прогоны.
+            spec(
+                "оболочка и терминал",
+                Some(r"^(bash|zsh|fish|sh|dash|tmux|tmux: server|screen|sshd|ssh-agent|gpg-agent|login|sudo|su|gnome-terminal-server|konsole|kitty|alacritty|wezterm-gui|foot|ptyxis)$"),
+                None,
+                None,
+            ),
+            // Snap, flatpak (`/app/` внутри песочницы), сторонние пакеты в /opt, AppImage.
+            spec("приложение", None, Some(r"^/(snap|app|opt)/|^/tmp/\.mount_"), None),
+        ]),
     }
     v
 }
+
 
 #[derive(Deserialize)]
 struct GuardConfig {
@@ -369,5 +402,88 @@ mod tests {
         assert_eq!(errors.len(), 1, "битое правило пропущено, остальные работают");
         assert!(matches!(p.classify(&proc(902, "Obsidian", Some("/Applications/Obsidian.app/Contents/MacOS/Obsidian"), &[])), KillPolicy::Confirm(_)));
         std::fs::remove_dir_all(dir).ok();
+    }
+}
+
+/// Правила Linux и Windows — на любой ОС: решения зависят только от данных процесса.
+#[cfg(test)]
+mod os_rules {
+    use super::*;
+    use crate::model::ProcState;
+
+    fn proc(pid: i32, name: &str, exe: Option<&str>, args: &[&str]) -> ProcessInfo {
+        ProcessInfo {
+            pid,
+            ppid: 1,
+            name: name.into(),
+            exe: exe.map(Into::into),
+            args: args.iter().map(|s| s.to_string()).collect(),
+            uid: platform::current_uid(),
+            footprint: Some(1),
+            rss: 1,
+            cpu_pct: 0.0,
+            threads: 1,
+            state: ProcState::Sleeping,
+            started_at: 1,
+            app_group: name.into(),
+        }
+    }
+
+    fn policy(os: &str) -> Policy {
+        let (p, errors) = Policy::from_specs(&builtin_protect_for(os), &builtin_confirm_for(os));
+        assert!(errors.is_empty(), "{errors:?}");
+        p
+    }
+
+    #[test]
+    fn all_builtin_rules_compile() {
+        for os in ["macos", "linux", "windows"] {
+            policy(os);
+        }
+    }
+
+    #[test]
+    fn linux_decisions() {
+        let p = policy("linux");
+        let protected = |name: &str, exe: &str| matches!(p.classify(&proc(500, name, Some(exe), &[])), KillPolicy::Protected(_));
+        let confirm = |name: &str, exe: &str| matches!(p.classify(&proc(500, name, Some(exe), &[])), KillPolicy::Confirm(_));
+        assert!(protected("systemd-journal", "/usr/lib/systemd/systemd-journald"));
+        assert!(protected("gnome-shell", "/usr/bin/gnome-shell"));
+        assert!(protected("gsd-power", "/usr/libexec/gsd-power"));
+        assert!(protected("rmon-app", "/usr/bin/rmon-app"));
+        assert!(confirm("chrome", "/opt/google/chrome/chrome"));
+        assert!(confirm("Isolated Web Co", "/usr/lib/firefox/firefox"), "по имени файла");
+        assert!(confirm("firefox", "/snap/firefox/4793/usr/lib/firefox/firefox"));
+        assert!(confirm("bash", "/usr/bin/bash"));
+        assert!(confirm("cursor", "/tmp/.mount_CursorAbC/usr/share/cursor/cursor"));
+        assert!(confirm("claude", "/home/x/.local/bin/claude"));
+        // Dev-прогоны из /usr/bin — свободны: ради них rmon и нужен.
+        assert_eq!(p.classify(&proc(700, "node", Some("/usr/bin/node"), &["node", "x.js"])), KillPolicy::Free);
+        assert_eq!(p.classify(&proc(701, "sleep", Some("/usr/bin/sleep"), &["sleep", "300"])), KillPolicy::Free);
+        assert_eq!(p.classify(&proc(702, "python3", Some("/usr/bin/python3.12"), &[])), KillPolicy::Free);
+    }
+
+    #[test]
+    fn windows_decisions() {
+        let p = policy("windows");
+        let protected = |name: &str, exe: Option<&str>| matches!(p.classify(&proc(500, name, exe, &[])), KillPolicy::Protected(_));
+        let confirm = |name: &str, exe: &str| matches!(p.classify(&proc(500, name, Some(exe), &[])), KillPolicy::Confirm(_));
+        assert!(protected("svchost.exe", None), "без пути — по имени");
+        assert!(protected("Memory Compression", None));
+        assert!(protected("RuntimeBroker.exe", Some(r"C:\Windows\System32\RuntimeBroker.exe")));
+        assert!(protected("explorer.exe", Some(r"C:\Windows\explorer.exe")), "путь Windows сильнее «оболочки»");
+        assert!(protected("rmon-app.exe", Some(r"C:\Program Files\Resource Monitor\rmon-app.exe")));
+        assert!(confirm("chrome.exe", r"C:\Program Files\Google\Chrome\Application\chrome.exe"));
+        assert!(confirm("Code.exe", r"C:\Users\x\AppData\Local\Programs\Microsoft VS Code\Code.exe"));
+        assert!(confirm("pwsh.exe", r"C:\Program Files\PowerShell\7\pwsh.exe"));
+        assert!(confirm("claude.exe", r"C:\Users\x\.local\bin\claude.exe"));
+        assert!(confirm("Spotify.exe", r"C:\Program Files\WindowsApps\SpotifyAB.SpotifyMusic_1.2\Spotify.exe"));
+        assert_eq!(p.classify(&proc(700, "node.exe", Some(r"C:\Program Files\nodejs\node.exe"), &["node", "x.js"])), KillPolicy::Free);
+        assert!(matches!(p.classify(&proc(4, "System", None, &[])), KillPolicy::Protected(_)));
+        let mut foreign = proc(800, "node.exe", Some(r"C:\Program Files\nodejs\node.exe"), &[]);
+        foreign.uid = u32::MAX;
+        if platform::current_uid() != 0 {
+            assert!(matches!(p.classify(&foreign), KillPolicy::Protected(_)), "чужой SID → u32::MAX → защищён");
+        }
     }
 }

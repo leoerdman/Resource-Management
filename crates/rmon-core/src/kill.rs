@@ -174,7 +174,7 @@ fn wait_exit(platform: &mut dyn Platform, pid: i32, grace: Duration) -> Result<b
     }
 }
 
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(all(test, any(target_os = "macos", target_os = "linux", windows)))]
 mod tests {
     use super::*;
     use crate::model::ProcState;
@@ -197,23 +197,58 @@ mod tests {
         }
     }
 
+    /// Долгий свой процесс, который можно снимать.
+    #[cfg(unix)]
+    fn spawn_sleeper() -> std::process::Child {
+        std::process::Command::new("sleep").arg("300").spawn().unwrap()
+    }
+
+    /// На Windows у `sleep` нет своего exe вне `C:\Windows` (а он защищён), поэтому спим
+    /// сами: тестовый бинарь запускает только [`sleeper_helper`].
+    #[cfg(windows)]
+    fn spawn_sleeper() -> std::process::Child {
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--ignored", "--exact", "kill::tests::sleeper_helper", "--nocapture"])
+            .env("RMON_TEST_SLEEPER", "1")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap()
+    }
+
+    #[cfg(windows)]
+    #[test]
+    #[ignore = "вспомогательный процесс для kills_own_sleep_and_refuses_bad_identity"]
+    fn sleeper_helper() {
+        if std::env::var_os("RMON_TEST_SLEEPER").is_some() {
+            std::thread::sleep(Duration::from_secs(300));
+        }
+    }
+
     #[test]
     fn kills_own_sleep_and_refuses_bad_identity() {
-        let mut child = std::process::Command::new("/bin/sleep").arg("300").spawn().unwrap();
+        let mut child = spawn_sleeper();
         let pid = child.id() as i32;
-        std::thread::sleep(Duration::from_millis(200));
+        std::thread::sleep(Duration::from_millis(300));
         let mut plat = platform::current().unwrap();
         let info = plat.process(pid).unwrap().unwrap();
-        assert!(matches!(policy_for(&info), KillPolicy::Confirm(_)), "утилиты /bin — с подтверждением");
-        let refused = kill_with(plat.as_mut(), &info, KillRequest::default()).unwrap_err();
-        assert!(matches!(refused, Error::ConfirmationRequired { .. }), "{refused}");
+        assert!(info.started_at > 0, "{info:?}");
+        assert_eq!(info.uid, platform::current_uid(), "свой процесс: {info:?}");
+        let policy = policy_for(&info);
+        assert!(policy.killable(), "{policy:?}");
+        #[cfg(target_os = "macos")]
+        assert!(matches!(policy, KillPolicy::Confirm(_)), "утилиты /bin — с подтверждением");
+        if matches!(policy, KillPolicy::Confirm(_)) {
+            let refused = kill_with(plat.as_mut(), &info, KillRequest::default()).unwrap_err();
+            assert!(matches!(refused, Error::ConfirmationRequired { .. }), "{refused}");
+        }
         let mut fake = info.clone();
         fake.started_at += 1000;
         let err = kill_with(plat.as_mut(), &fake, KillRequest::default()).unwrap_err();
         assert!(matches!(err, Error::IdentityMismatch { .. }), "{err}");
-        // pid 1 — отказ.
-        let launchd = proc(1, "launchd", Some("/sbin/launchd"));
-        assert!(kill_with(plat.as_mut(), &launchd, KillRequest::default()).is_err());
+        // init / System — отказ.
+        let init = proc(platform::LAST_KERNEL_PID, "launchd", Some("/sbin/launchd"));
+        assert!(kill_with(plat.as_mut(), &init, KillRequest::default()).is_err());
         // Пожинаем ребёнка в фоне, иначе он останется зомби и «живым» для kill(0).
         let reaper = std::thread::spawn(move || child.wait());
         let out = kill_with(plat.as_mut(), &info, KillRequest { reason: "тест".into(), confirm: true, ..Default::default() }).unwrap();

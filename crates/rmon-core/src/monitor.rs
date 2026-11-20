@@ -380,6 +380,9 @@ struct Published {
     series: Arc<SeriesMap>,
 }
 
+/// (pid, started_at) → [(t, bytes)].
+type SeriesMap = HashMap<(i32, u64), Vec<(u64, u64)>>;
+
 type Listener = Box<dyn Fn(&Arc<Dashboard>) + Send + Sync>;
 
 /// Ручка фонового монитора: читает сводку, снимает процессы. Дешёвая в клонировании.
@@ -493,7 +496,7 @@ mod tests {
         assert_eq!(limit_args(&a, 5), vec!["абвгд".to_string(), "…".to_string()]);
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     #[test]
     fn ticks_produce_dashboard() {
         let mut m = Monitor::new(MonitorConfig { analyze_every: 1, ..MonitorConfig::default() }).unwrap();
@@ -507,6 +510,10 @@ mod tests {
         let me = std::process::id() as i32;
         assert!(!s.ancestors(me).is_empty(), "у теста есть родитель");
         let cwd = crate::platform::current().unwrap().cwd(me).unwrap();
+        // Windows не отдаёт рабочий каталог чужого (и своего) процесса без чтения его PEB.
+        #[cfg(not(windows))]
         assert_eq!(cwd.as_deref(), std::env::current_dir().unwrap().to_str());
+        #[cfg(windows)]
+        assert_eq!(cwd, None);
     }
 }
