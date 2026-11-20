@@ -1462,6 +1462,13 @@ code {
   flex-direction: column;
   justify-content: center;
 }
+.orphan-card .guard-switches {
+  justify-content: flex-start;
+  gap: 8px;
+}
+.orphan-card .mode-word {
+  font-size: 22px;
+}
 .banner {
   display: flex;
   align-items: center;

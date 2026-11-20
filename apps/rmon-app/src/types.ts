@@ -37,6 +37,8 @@ import type { KillPolicy } from "./bindings/KillPolicy";
 export type { GuardConfig } from "./bindings/GuardConfig";
 export type { GuardEvent } from "./bindings/GuardEvent";
 export type { GuardLimit } from "./bindings/GuardLimit";
+export type { GuardOrphans } from "./bindings/GuardOrphans";
+export type { GuardOrphanWatch } from "./bindings/GuardOrphanWatch";
 export type { GuardRed } from "./bindings/GuardRed";
 export type { GuardSettings } from "./bindings/GuardSettings";
 export type { GuardStatus } from "./bindings/GuardStatus";

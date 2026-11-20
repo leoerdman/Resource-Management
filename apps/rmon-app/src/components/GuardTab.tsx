@@ -1,11 +1,12 @@
 import { memo, useState } from "react";
 import { backend } from "../api";
-import { cwdShort, errText, fmtBytes, fmtClock, fmtDateTime } from "../format";
+import { cwdShort, errText, fmtBytes, fmtClock, fmtDateTime, fmtSecs } from "../format";
 import type { Author, GuardEvent, GuardMode, GuardSettings, GuardZone, Origin } from "../types";
 import { guardStore, useGuard } from "../guardStore";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Switch } from "./Controls";
 import { GuardSettingsPanel } from "./GuardSettingsPanel";
+import { OrphanCleanupCard } from "./OrphanCleanupCard";
 
 export const MODE_LABEL: Record<GuardMode["kind"], string> = {
   off: "выключен",
@@ -80,12 +81,14 @@ export function GuardTab({ onToast }: Props) {
   const { status, error, saving } = useGuard();
   const [confirm, setConfirm] = useState<Confirm>(null);
 
-  async function patchGuard(patch: Partial<GuardSettings>, done: string) {
+  async function patchGuard(patch: Partial<GuardSettings>, done?: string): Promise<boolean> {
     try {
       await guardStore.patch(patch);
-      onToast(true, done);
+      if (done) onToast(true, done);
+      return true;
     } catch (e) {
       onToast(false, errText(e));
+      return false;
     }
   }
 
@@ -162,6 +165,15 @@ export function GuardTab({ onToast }: Props) {
             />
           </div>
         </section>
+
+        <OrphanCleanupCard
+          cfg={cfg.orphans}
+          watch={status.orphans}
+          guardActing={mode.kind === "armed" || mode.kind === "dry_run"}
+          dryRun={mode.kind === "dry_run"}
+          saving={saving}
+          apply={patchGuard}
+        />
 
         {legacy.kind === "running" && (
           <section className="banner banner-warn">
@@ -277,6 +289,28 @@ const EventRow = memo(function EventRow({ e }: { e: GuardEvent }) {
           </div>
         </li>
       );
+    case "orphan-kill": {
+      const failed = !e.dry_run && (e.error != null || !["term", "kill"].includes(e.outcome));
+      return (
+        <li className={e.dry_run ? "gev ev-would" : failed ? "gev ev-kill failed" : "gev ev-kill"}>
+          {time}
+          <div className="gbody">
+            <div>
+              <b>
+                {e.dry_run ? "Проба: сняла бы сироту" : "Снята сирота"} {e.victim.kind} {fmtBytes(e.victim.mem)}
+              </b>{" "}
+              <span className="dim">pid {e.victim.pid}</span>
+              {!e.dry_run && <> — {OUTCOME_LABEL[e.outcome] ?? e.outcome}</>}
+              {e.error && <span className="error"> · {e.error}</span>}
+            </div>
+            <div title={e.author.chain.map((c) => `${c.pid} ${c.name}: ${c.args}`).join("\n")}>{authorText(e.author)}</div>
+            <div className="dim small">
+              простой {fmtSecs(e.idle_secs)} · <code>{e.victim.cmd}</code>
+            </div>
+          </div>
+        </li>
+      );
+    }
     case "no-victim":
       return (
         <li className="gev ev-novictim">

@@ -146,6 +146,12 @@ pub fn is_dev(name: &str) -> bool {
         .any(|d| name == *d || (name.starts_with(d) && name[d.len()..].chars().all(|c| c.is_ascii_digit() || c == '.')))
 }
 
+/// Сирота: dev-процесс, чей родитель умер (ppid 1), не меньше порога. Одно правило для
+/// подозреваемых «Сирота» и автоочистки сторожа ([`crate::guard::orphans`]).
+pub fn is_orphan(p: &ProcessInfo, th: &Thresholds) -> bool {
+    p.ppid == 1 && p.state != ProcState::Zombie && is_dev(&p.name) && p.reclaim() >= th.orphan_bytes
+}
+
 /// Наклон памяти каждого процесса последнего снимка, байт/мин.
 pub fn growth_rates(history: &History) -> HashMap<(i32, u64), f64> {
     history.all_series().into_iter().filter_map(|(k, s)| slope_per_min(&s).map(|v| (k, v))).collect()
@@ -249,7 +255,7 @@ pub fn analyze(history: &History, th: &Thresholds) -> Vec<Suspect> {
                 ));
             }
         }
-        if p.ppid == 1 && is_dev(&p.name) && mem >= th.orphan_bytes {
+        if is_orphan(p, th) {
             put(mk(
                 SuspectKind::Orphan,
                 size_score(45.0),

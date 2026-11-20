@@ -72,7 +72,31 @@ why: string,
 /**
  * Крупные, кого не тронул.
  */
-rejected: Array<GuardRejected>, } | { "ev": "limit", 
+rejected: Array<GuardRejected>, } | { "ev": "orphan-kill", 
+/**
+ * Проба: только «сняли бы».
+ */
+dry_run: boolean, 
+/**
+ * Как у [`EventKind::Kill`]; в пробе — `would`.
+ */
+outcome: string, 
+/**
+ * Ошибка, если была.
+ */
+error: string | null, 
+/**
+ * Сирота; `kind` — имя исполняемого файла.
+ */
+victim: GuardCandidate, 
+/**
+ * Сколько простаивала, секунды.
+ */
+idle_secs: number, 
+/**
+ * Чей процесс.
+ */
+author: Author, } | { "ev": "limit", 
 /**
  * Какой.
  */

@@ -9,7 +9,7 @@ use ts_rs::TS;
 
 use crate::analyze::Thresholds;
 use crate::config::{self, Config};
-use crate::guard::{Limit, RedConfig};
+use crate::guard::{Limit, OrphanConfig, RedConfig};
 
 /// Настройки приложения (секция `[app]`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -56,6 +56,8 @@ pub struct GuardSettings {
     pub red: RedConfig,
     /// Пределы убийств.
     pub limits: Vec<Limit>,
+    /// Автоочистка сирот.
+    pub orphans: OrphanConfig,
 }
 
 /// Пороги анализа — в окне в человеческих единицах.
@@ -113,6 +115,7 @@ impl Settings {
                 min_victim_mb: g.min_victim_mb,
                 red: g.red.clone(),
                 limits: g.limits.clone(),
+                orphans: g.orphans.clone(),
             },
             thresholds: ThresholdSettings {
                 hog_mb: t.hog_bytes / MIB,
@@ -153,6 +156,7 @@ impl Settings {
         g.min_victim_mb = s.min_victim_mb;
         g.red = s.red.clone();
         g.limits = s.limits.clone();
+        g.orphans = s.orphans.clone();
         let t = &mut c.thresholds;
         let s = &self.thresholds;
         t.hog_bytes = s.hog_mb * MIB;
@@ -166,7 +170,7 @@ impl Settings {
     /// Проверка значений: человеку — понятная причина отказа.
     pub fn validate(&self) -> Result<(), String> {
         let g = &self.guard;
-        let checks: [(bool, &str); 8] = [
+        let checks: [(bool, &str); 10] = [
             (g.sustain_secs <= 600, "красное должно держаться не дольше 10 минут"),
             (g.after_kill_secs <= 3600, "пауза после снятия — не больше часа"),
             (g.term_grace_secs <= 120, "ожидание после SIGTERM — не больше 2 минут"),
@@ -178,6 +182,11 @@ impl Settings {
                 "нужен хотя бы один предел убийств (окно от 10 с, от 1 убийства)",
             ),
             (self.thresholds.duplicate_count >= 2, "дубли — от двух копий"),
+            ((1..=1440).contains(&g.orphans.idle_mins), "простой сироты — от 1 минуты до суток"),
+            (
+                g.orphans.idle_cpu_pct.is_finite() && (0.0..=100.0).contains(&g.orphans.idle_cpu_pct),
+                "простой сироты — CPU от 0 до 100 %",
+            ),
         ];
         match checks.iter().find(|(ok, _)| !ok) {
             Some((_, why)) => Err((*why).to_string()),
@@ -244,6 +253,7 @@ pub fn save_to(path: &std::path::Path, settings: &Settings) -> Result<Config, St
         min_victim_mb: u64,
         red: &'a RedConfig,
         limits: &'a [Limit],
+        orphans: &'a OrphanConfig,
     }
     let g = &cfg.guard;
     let patch = Patch {
@@ -260,6 +270,7 @@ pub fn save_to(path: &std::path::Path, settings: &Settings) -> Result<Config, St
             min_victim_mb: g.min_victim_mb,
             red: &g.red,
             limits: &g.limits,
+            orphans: &g.orphans,
         },
     };
     let patch_text = toml::to_string(&patch).map_err(|e| e.to_string())?;
@@ -299,6 +310,9 @@ mod tests {
         s.guard.dry_run = true;
         s.app.autostart = false;
         s.thresholds.hog_mb = 1500;
+        assert!(s.guard.orphans.enabled, "автоочистка сирот включена по умолчанию");
+        s.guard.orphans.enabled = false;
+        s.guard.orphans.idle_mins = 3;
         save_to(&file, &s).unwrap();
         let text = std::fs::read_to_string(&file).unwrap();
         assert!(text.contains("# мой комментарий"));
@@ -309,6 +323,8 @@ mod tests {
         assert!(!back.app.autostart);
         assert_eq!(back.thresholds.hog_mb, 1500);
         assert_eq!(back.guard.min_victim_mb, 2048);
+        assert!(!back.guard.orphans.enabled);
+        assert_eq!(back.guard.orphans.idle_mins, 3);
         std::fs::remove_dir_all(dir).ok();
     }
 
@@ -318,5 +334,8 @@ mod tests {
         assert!(s.validate().is_ok());
         s.guard.min_victim_mb = 10;
         assert!(s.validate().unwrap_err().contains("100 МБ"));
+        s.guard.min_victim_mb = 1024;
+        s.guard.orphans.idle_mins = 0;
+        assert!(s.validate().unwrap_err().contains("сироты"));
     }
 }

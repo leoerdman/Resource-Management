@@ -2,6 +2,7 @@
 import type { GuardConfig } from "./GuardConfig";
 import type { GuardEvent } from "./GuardEvent";
 import type { GuardMode } from "./GuardMode";
+import type { GuardOrphanWatch } from "./GuardOrphanWatch";
 import type { GuardZone } from "./GuardZone";
 import type { LegacyGuard } from "./LegacyGuard";
 
@@ -29,6 +30,10 @@ red_for_secs: number,
  * Старый сторож.
  */
 legacy: LegacyGuard, 
+/**
+ * Сироты под наблюдением автоочистки.
+ */
+orphans: GuardOrphanWatch, 
 /**
  * Действующие настройки.
  */

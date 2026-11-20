@@ -16,9 +16,12 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use super::author::{self, Author};
+use super::author::{self, Author, Origin};
 use super::legacy::{self, Legacy};
-use super::{Candidate, Decision, Guard, GuardConfig, GuardMode, Rejected, Rules, Zone, pressure_level};
+use super::orphans::{IdleOrphan, OrphanStatus, OrphanWatch};
+use super::{
+    Candidate, Decision, Guard, GuardConfig, GuardMode, Rejected, Rules, Zone, pressure_level, self_and_ancestors,
+};
 use crate::config::{self, Config};
 use crate::error::Error;
 use crate::fmt;
@@ -30,6 +33,8 @@ use crate::platform::{self, Platform};
 const LEGACY_CHECK: Duration = Duration::from_secs(30);
 /// Сколько последних событий держать в памяти для окна.
 const RECENT: usize = 50;
+/// Сирот за один опрос, не больше: снятие ждёт выхода процесса, а красная зона ждать не должна.
+const ORPHANS_PER_STEP: usize = 3;
 
 /// Давление в момент события.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -113,6 +118,22 @@ pub enum EventKind {
         /// Крупные, кого не тронул.
         rejected: Vec<Rejected>,
     },
+    /// Сирота простояла положенное — снята (или в пробе — сняли бы).
+    OrphanKill {
+        /// Проба: только «сняли бы».
+        dry_run: bool,
+        /// Как у [`EventKind::Kill`]; в пробе — `would`.
+        outcome: String,
+        /// Ошибка, если была.
+        error: Option<String>,
+        /// Сирота; `kind` — имя исполняемого файла.
+        victim: Candidate,
+        /// Сколько простаивала, секунды.
+        #[ts(type = "number")]
+        idle_secs: u64,
+        /// Чей процесс.
+        author: Author,
+    },
     /// Упёрлись в лимит.
     Limit {
         /// Какой.
@@ -149,19 +170,27 @@ impl GuardEvent {
             EventKind::Mode { mode } => format!("сторож: {}", mode_text(mode)),
             EventKind::Zone { zone, why } => format!("зона {}: {why}", zone_word(*zone)),
             EventKind::Kill { outcome, victim, author, error, .. } => {
-                let what = match outcome.as_str() {
-                    "term" | "kill" => "снят",
-                    "alive" => "не завершился",
-                    "gone" => "уже завершился",
-                    "reused" => "подменился — не тронут",
-                    "denied" => "нет прав",
-                    _ => "отказ",
-                };
+                let what = outcome_word(outcome);
                 let err = error.as_ref().map(|e| format!(" ({e})")).unwrap_or_default();
                 format!("{} {} {what}{err} — {}", victim.kind, fmt::bytes(victim.mem), author::describe(author))
             }
             EventKind::WouldKill { victim, author, .. } => {
                 format!("проба: снял бы {} {} — {}", victim.kind, fmt::bytes(victim.mem), author::describe(author))
+            }
+            EventKind::OrphanKill { dry_run, outcome, victim, idle_secs, author, error } => {
+                let what = if *dry_run {
+                    "проба: сняли бы сироту".to_string()
+                } else {
+                    format!("сирота — {}", outcome_word(outcome))
+                };
+                let err = error.as_ref().map(|e| format!(" ({e})")).unwrap_or_default();
+                format!(
+                    "{what}: {} {}, простой {}{err} — {}",
+                    victim.kind,
+                    fmt::bytes(victim.mem),
+                    fmt::duration_human(*idle_secs),
+                    author::describe(author)
+                )
             }
             EventKind::NoVictim { why, rejected } => {
                 format!("красно ({why}), снять некого; крупных не тронуто: {}", rejected.len())
@@ -169,6 +198,17 @@ impl GuardEvent {
             EventKind::Limit { why } => format!("лимит: {why}"),
             EventKind::ConfigError { error } => format!("настройки сторожа не разобраны: {error}"),
         }
+    }
+}
+
+fn outcome_word(outcome: &str) -> &'static str {
+    match outcome {
+        "term" | "kill" => "снят",
+        "alive" => "не завершился",
+        "gone" => "уже завершился",
+        "reused" => "подменился — не тронут",
+        "denied" => "нет прав",
+        _ => "отказ",
     }
 }
 
@@ -206,6 +246,8 @@ pub struct GuardStatus {
     pub red_for_secs: u64,
     /// Старый сторож.
     pub legacy: Legacy,
+    /// Сироты под наблюдением автоочистки.
+    pub orphans: OrphanStatus,
     /// Действующие настройки.
     pub config: GuardConfig,
     /// Где настройки.
@@ -326,6 +368,18 @@ impl GuardHandle {
     }
 }
 
+/// Итог снятия словом журнала: `term`, `kill`, `alive`, `gone`, `reused`, `denied`, `refused`.
+fn kill_outcome(r: crate::Result<crate::kill::KillOutcome>) -> (&'static str, Option<String>) {
+    match r {
+        Ok(o) if o.exited => (if o.signal == platform::Signal::Kill { "kill" } else { "term" }, None),
+        Ok(_) => ("alive", None),
+        Err(Error::ProcessGone { .. }) => ("gone", None),
+        Err(Error::IdentityMismatch { .. }) => ("reused", None),
+        Err(e @ Error::Permission { .. }) => ("denied", Some(e.to_string())),
+        Err(e) => ("refused", Some(e.to_string())),
+    }
+}
+
 fn lock_path() -> PathBuf {
     config::log_dir().join("guard.lock")
 }
@@ -364,6 +418,7 @@ struct Runner {
     cfg_error: Option<String>,
     rules: Rules,
     guard: Guard,
+    orphans: OrphanWatch,
     lock: Option<File>,
     legacy: Legacy,
     legacy_checked: Option<Instant>,
@@ -444,6 +499,7 @@ impl Runner {
             zone_why,
             red_for_secs,
             legacy: self.legacy.clone(),
+            orphans: self.orphans.status(),
             config: self.cfg.guard.clone(),
             config_file: config::config_file().display().to_string(),
             recent: self.recent.iter().cloned().collect(),
@@ -491,9 +547,14 @@ impl Runner {
                     self.emit(EventKind::NoVictim { why, rejected }, Some(pressure.clone()), None)
                 }
                 Decision::Act { victim, why, red_for_secs } => {
-                    self.act(&cfg, snap, victim, why, red_for_secs, pressure, now_ms)
+                    self.act(&cfg, snap, victim, why, red_for_secs, pressure.clone(), now_ms)
                 }
             }
+        }
+        if acting && cfg.orphans.enabled {
+            self.clean_orphans(&cfg, snap, &pressure, now_ms);
+        } else {
+            self.orphans.clear();
         }
         self.publish(obs.zone_why, self.guard.red_for_secs(now_ms));
     }
@@ -531,14 +592,7 @@ impl Runner {
             reason: format!("сторож: {why}"),
             dry_run: false,
         };
-        let (outcome, error) = match kill_with(self.platform.as_mut(), &target, req) {
-            Ok(o) if o.exited => (if o.signal == platform::Signal::Kill { "kill" } else { "term" }, None),
-            Ok(_) => ("alive", None),
-            Err(Error::ProcessGone { .. }) => ("gone", None),
-            Err(Error::IdentityMismatch { .. }) => ("reused", None),
-            Err(e @ Error::Permission { .. }) => ("denied", Some(e.to_string())),
-            Err(e) => ("refused", Some(e.to_string())),
-        };
+        let (outcome, error) = kill_outcome(kill_with(self.platform.as_mut(), &target, req));
         let killed = matches!(outcome, "term" | "kill");
         let notice = (killed && cfg.notify).then(|| Notice {
             title: "Сторож памяти".into(),
@@ -555,6 +609,79 @@ impl Runner {
             "term" | "kill" | "alive" => self.guard.acted(cfg, now_ms),
             "denied" | "refused" => self.guard.denied(pid),
             _ => {}
+        }
+    }
+
+    /// Снять простоявших сирот (не больше [`ORPHANS_PER_STEP`]), одно уведомление на всех.
+    fn clean_orphans(&mut self, cfg: &GuardConfig, snap: &Snapshot, pressure: &PressureFields, now_ms: u64) {
+        let exclude = self_and_ancestors(snap, std::process::id() as i32);
+        let due = self.orphans.observe(
+            &cfg.orphans,
+            &self.cfg.thresholds,
+            &self.rules,
+            snap,
+            &exclude,
+            now_ms,
+            crate::policy::policy_for,
+        );
+        let mut events = Vec::new();
+        let mut cleaned: Vec<String> = Vec::new();
+        let mut freed = 0;
+        for IdleOrphan { victim, idle_secs } in due.into_iter().take(ORPHANS_PER_STEP) {
+            let (pid, started_at) = (victim.pid, victim.started_at);
+            let author = author::gather(snap, pid, self.platform.as_mut());
+            // Задачу LaunchAgent launchd перезапустит — снимать её бессмысленно.
+            if matches!(author.origin, Origin::LaunchAgent { .. }) {
+                self.orphans.skip(pid, started_at);
+                continue;
+            }
+            let (outcome, error) = if cfg.dry_run {
+                ("would", None)
+            } else {
+                let Some(target) = snap.process(pid).filter(|p| p.started_at == started_at).cloned() else {
+                    continue;
+                };
+                let req = KillRequest {
+                    signal_term_grace: Duration::from_secs(cfg.term_grace_secs),
+                    confirm: false,
+                    requested_by: Requester::Guard,
+                    reason: format!("сторож: сирота простаивает {}", fmt::duration_human(idle_secs)),
+                    dry_run: false,
+                };
+                kill_outcome(kill_with(self.platform.as_mut(), &target, req))
+            };
+            if matches!(outcome, "would" | "term" | "kill") {
+                cleaned.push(format!("{} {}", victim.kind, fmt::bytes(victim.mem)));
+                freed += victim.mem;
+            }
+            // Снятую, упрямую или запретную больше не предлагаем; ушедшая забудется сама.
+            if !matches!(outcome, "gone" | "reused") {
+                self.orphans.skip(pid, started_at);
+            }
+            events.push(EventKind::OrphanKill {
+                dry_run: cfg.dry_run,
+                outcome: outcome.into(),
+                error,
+                victim,
+                idle_secs,
+                author,
+            });
+        }
+        let notify = cfg.notify && (!cfg.dry_run || cfg.notify_dry_run) && !cleaned.is_empty();
+        let mut notice = notify.then(|| Notice {
+            title: if cfg.dry_run { "Сторож памяти (проба)" } else { "Сторож памяти" }.into(),
+            subtitle: format!(
+                "{} сирот в простое: {}, {}",
+                if cfg.dry_run { "Снял бы" } else { "Сняты" },
+                cleaned.len(),
+                fmt::bytes(freed)
+            ),
+            body: format!("{} — простой от {} мин", cleaned.join(", "), cfg.orphans.idle_mins),
+        });
+        let last = events.len().saturating_sub(1);
+        for (i, kind) in events.into_iter().enumerate() {
+            let n = if i == last { notice.take() } else { None };
+            self.emit(kind, Some(pressure.clone()), n);
         }
     }
 
@@ -597,6 +724,7 @@ pub fn spawn(on_event: impl Fn(&GuardEvent) + Send + Sync + 'static) -> crate::R
             zone_why: String::new(),
             red_for_secs: 0,
             legacy: Legacy::Absent,
+            orphans: OrphanStatus::default(),
             config: cfg.guard.clone(),
             config_file: config::config_file().display().to_string(),
             recent: read_events(RECENT),
@@ -609,6 +737,7 @@ pub fn spawn(on_event: impl Fn(&GuardEvent) + Send + Sync + 'static) -> crate::R
         cfg_error: None,
         rules,
         guard: Guard::default(),
+        orphans: OrphanWatch::default(),
         lock: None,
         legacy: Legacy::Absent,
         legacy_checked: None,

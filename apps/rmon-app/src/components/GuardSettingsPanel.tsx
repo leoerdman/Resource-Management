@@ -1,4 +1,4 @@
-import { errText, fmtBytes } from "../format";
+import { errText, fmtBytes, fmtSecs } from "../format";
 import { guardStore } from "../guardStore";
 import type { GuardConfig, GuardLimit, GuardSettings } from "../types";
 import { NumField, SelectField, Switch } from "./Controls";
@@ -6,14 +6,6 @@ import { NumField, SelectField, Switch } from "./Controls";
 const MB = 1024 * 1024;
 
 const LEVEL_LABEL: Record<number, string> = { 1: "нормальное", 2: "жёлтое", 4: "красное" };
-
-/** "45 с", "10 мин", "1 ч", "1 ч 30 мин". */
-function fmtSecs(s: number): string {
-  if (s < 60) return `${s} с`;
-  if (s < 3600) return s % 60 ? `${Math.floor(s / 60)} мин ${s % 60} с` : `${s / 60} мин`;
-  const m = Math.round(s / 60);
-  return m % 60 ? `${Math.floor(m / 60)} ч ${m % 60} мин` : `${m / 60} ч`;
-}
 
 const LEVELS_RED = [
   { value: 2, label: "жёлтое" },

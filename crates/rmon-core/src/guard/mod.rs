@@ -12,12 +12,15 @@
 //!    SIGTERM → `term_grace_secs` → SIGKILL. Одна жертва за раз, потом `after_kill_secs`
 //!    паузы; не больше `limits` убийств в окне.
 //! 5. **Автор** жертвы ([`author`]): проект, сессия Claude Code / M Code, терминал, LaunchAgent.
+//! 6. **Сироты** ([`orphans`]): брошенный dev-процесс, простоявший `idle_mins`, снимается и в
+//!    зелёной зоне — тем же защитным слоем.
 //!
 //! Здесь — чистая логика (зона, гистерезис, лимит, выбор жертвы, машина состояний [`Guard`]);
 //! поток, блокировка «один сторож на машину», журнал и уведомления — в [`runner`].
 
 pub mod author;
 pub mod legacy;
+pub mod orphans;
 pub mod runner;
 
 use std::collections::HashSet;
@@ -33,6 +36,7 @@ use crate::model::{MIB, Pressure, ProcessInfo, Snapshot, SystemMemory};
 use crate::policy::{KillPolicy, policy_for};
 
 pub use author::Author;
+pub use orphans::OrphanConfig;
 
 /// Когда зона красная.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -124,6 +128,8 @@ pub struct GuardConfig {
     /// «Никогда» — совпало хоть одно поле. Тот же список политика rmon считает
     /// «только с подтверждением» и для ручного снятия.
     pub never: Vec<RuleSpec>,
+    /// Автоочистка сирот в простое — не ждёт красной зоны.
+    pub orphans: OrphanConfig,
 }
 
 fn allow(name: &str, exe: &str, args: Option<&str>, args_not: Option<&str>, parent_not: Option<&str>) -> AllowRule {
@@ -230,6 +236,7 @@ impl Default for GuardConfig {
             limits: vec![Limit { window_secs: 60, max: 2 }, Limit { window_secs: 600, max: 6 }],
             allow: default_allow(),
             never: default_never(),
+            orphans: OrphanConfig::default(),
         }
     }
 }

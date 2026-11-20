@@ -59,6 +59,14 @@ export function fmtAge(startedAt: number, now: number): string {
 
 const pad = (n: number) => (n < 10 ? "0" + n : String(n));
 
+/** "45 с", "10 мин", "1 ч", "1 ч 30 мин". */
+export function fmtSecs(s: number): string {
+  if (s < 60) return `${s} с`;
+  if (s < 3600) return s % 60 ? `${Math.floor(s / 60)} мин ${s % 60} с` : `${s / 60} мин`;
+  const m = Math.round(s / 60);
+  return m % 60 ? `${Math.floor(m / 60)} ч ${m % 60} мин` : `${m / 60} ч`;
+}
+
 export function fmtClock(ts: number): string {
   const d = new Date(ts * 1000);
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
