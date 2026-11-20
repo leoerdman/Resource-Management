@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { backend, type OpenTab } from "./api";
 import { errText } from "./format";
 import type { Dashboard, ProcKey } from "./types";
+import { GuardToggle } from "./components/GuardToggle";
 import { Header } from "./components/Header";
 import { SuspectsTab } from "./components/SuspectsTab";
 import { AppsTab } from "./components/AppsTab";
@@ -164,6 +165,7 @@ export default function App() {
             {t.id === "suspects" && dash.suspects.length > 0 && <span className="count">{dash.suspects.length}</span>}
           </button>
         ))}
+        <GuardToggle onOpen={() => setTab("guard")} onToast={pushToast} />
       </nav>
       <main className="content">
         {tab === "suspects" && <SuspectsTab suspects={dash.suspects} processes={dash.processes} onKill={onKill} onOpen={onOpen} />}

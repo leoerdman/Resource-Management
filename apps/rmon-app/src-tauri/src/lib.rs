@@ -64,6 +64,8 @@ struct AppState {
     /// Подписка окна на сводку.
     channel: Mutex<Option<Channel<Arc<Dashboard>>>>,
     tray: Mutex<TrayView>,
+    /// Окно было видно на прошлом шаге — по смене видимости меняется темп сбора.
+    visible: std::sync::atomic::AtomicBool,
 }
 
 impl AppState {
@@ -76,14 +78,26 @@ impl AppState {
     }
 }
 
+/// Окно на экране: показано и не свёрнуто в Dock (свёрнутому сводки и частый сбор не нужны).
 fn window_visible(app: &AppHandle) -> bool {
-    app.get_webview_window("main").and_then(|w| w.is_visible().ok()).unwrap_or(false)
+    app.get_webview_window("main")
+        .is_some_and(|w| w.is_visible().unwrap_or(false) && !w.is_minimized().unwrap_or(false))
 }
+
+/// Темп сбора: окно видно — раз в 2 с (живой интерфейс), скрыто — раз в 3 с (сторожу и значку хватает).
+const TICK_VISIBLE: Duration = Duration::from_secs(2);
+const TICK_HIDDEN: Duration = Duration::from_secs(3);
 
 fn deliver(app: &AppHandle, d: &Arc<Dashboard>) {
     let state = app.state::<AppState>();
     update_tray(app, &state, Some(d));
-    if !window_visible(app) {
+    let visible = window_visible(app);
+    if state.visible.swap(visible, std::sync::atomic::Ordering::Relaxed) != visible
+        && let Ok(m) = state.monitor()
+    {
+        m.set_tick(if visible { TICK_VISIBLE } else { TICK_HIDDEN });
+    }
+    if !visible {
         return;
     }
     let channel = state.channel.lock().unwrap_or_else(|e| e.into_inner()).clone();

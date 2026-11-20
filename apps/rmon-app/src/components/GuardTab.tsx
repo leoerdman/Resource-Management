@@ -1,11 +1,11 @@
-import { memo, useCallback, useEffect, useState } from "react";
+import { memo, useState } from "react";
 import { backend } from "../api";
 import { cwdShort, errText, fmtBytes, fmtClock, fmtDateTime } from "../format";
-import type { Author, GuardConfig, GuardEvent, GuardMode, GuardSettings, GuardStatus, GuardZone, Origin } from "../types";
+import type { Author, GuardConfig, GuardEvent, GuardMode, GuardSettings, GuardZone, Origin } from "../types";
+import { guardStore, useGuard } from "../guardStore";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Switch } from "./Controls";
 
-const POLL_MS = 3000;
 const MB = 1024 * 1024;
 
 export const MODE_LABEL: Record<GuardMode["kind"], string> = {
@@ -88,64 +88,22 @@ interface Props {
 type Confirm = "retire" | "restore" | null;
 
 export function GuardTab({ onToast }: Props) {
-  const [status, setStatus] = useState<GuardStatus | null>(null);
-  const [guard, setGuard] = useState<GuardSettings | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
+  const { status, settings: guard, error, saving } = useGuard();
   const [confirm, setConfirm] = useState<Confirm>(null);
 
-  const refresh = useCallback(async () => {
-    try {
-      const b = await backend();
-      setStatus(await b.guardStatus());
-      setError(null);
-    } catch (e) {
-      setError(errText(e));
-    }
-  }, []);
-
-  // Status now, on every guard event, and every few seconds («красное держится N с» ticks).
-  useEffect(() => {
-    let alive = true;
-    let off: (() => void) | null = null;
-    backend()
-      .then(async (b) => {
-        const s = await b.getSettings();
-        if (alive) setGuard(s.guard);
-        const unsub = await b.onGuardEvent(() => refresh());
-        if (alive) off = unsub;
-        else unsub();
-      })
-      .catch((e) => alive && setError(errText(e)));
-    refresh();
-    const id = setInterval(refresh, POLL_MS);
-    return () => {
-      alive = false;
-      clearInterval(id);
-      off?.();
-    };
-  }, [refresh]);
-
   async function patchGuard(patch: Partial<GuardSettings>, done: string) {
-    setSaving(true);
     try {
-      const b = await backend();
-      const cur = await b.getSettings();
-      const saved = await b.saveSettings({ ...cur, guard: { ...cur.guard, ...patch } });
-      setGuard(saved.guard);
+      await guardStore.patch(patch);
       onToast(true, done);
-      await refresh();
     } catch (e) {
       onToast(false, errText(e));
-    } finally {
-      setSaving(false);
     }
   }
 
   async function legacyAction(which: "retire" | "restore") {
     try {
       const b = await backend();
-      setStatus(which === "retire" ? await b.retireLegacy() : await b.restoreLegacy());
+      guardStore.setStatus(which === "retire" ? await b.retireLegacy() : await b.restoreLegacy());
       onToast(true, which === "retire" ? "Старый сторож выгружен — теперь сторожит Resource Monitor" : "Старый сторож возвращён");
       setConfirm(null);
     } catch (e) {

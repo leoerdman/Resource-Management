@@ -208,6 +208,9 @@ pub struct Monitor {
     growth: HashMap<(i32, u64), f64>,
     /// Каталоги dev-процессов по личности: читаются один раз за жизнь процесса.
     cwds: HashMap<(i32, u64), Option<String>>,
+    /// Политика по личности процесса и поколению настроек: ~30 регулярных выражений на
+    /// процесс — самое дорогое в шаге, а зависит она только от неизменного (путь, аргументы).
+    policies: HashMap<(i32, u64), (u64, KillPolicy)>,
     /// Пороги — общие с ручкой, чтобы менять их на лету из настроек.
     thresholds: Arc<RwLock<Thresholds>>,
     ticks: u64,
@@ -230,6 +233,7 @@ impl Monitor {
             suspects: Vec::new(),
             growth: HashMap::new(),
             cwds: HashMap::new(),
+            policies: HashMap::new(),
             ticks: 0,
         }
     }
@@ -257,7 +261,7 @@ impl Monitor {
             self.suspects = analyze(&self.history, &thresholds);
             self.growth = growth_rates(&self.history);
         }
-        self.refresh_cwds(&snap);
+        self.refresh_static_info(&snap);
         let dashboard = Dashboard {
             taken_at: snap.taken_at,
             system: snap.system,
@@ -269,7 +273,7 @@ impl Monitor {
         Ok(Tick { dashboard, snapshot: snap, analyzed })
     }
 
-    fn refresh_cwds(&mut self, snap: &Snapshot) {
+    fn refresh_static_info(&mut self, snap: &Snapshot) {
         let alive: std::collections::HashSet<(i32, u64)> =
             snap.processes.iter().map(|p| (p.pid, p.started_at)).collect();
         self.cwds.retain(|k, _| alive.contains(k));
@@ -299,7 +303,7 @@ impl Monitor {
             app_group: p.app_group.clone(),
             cwd: self.cwds.get(&(p.pid, p.started_at)).cloned().flatten(),
             growth_per_min: self.growth.get(&(p.pid, p.started_at)).copied(),
-            policy: policy_for(p),
+            policy: self.policies.get(&(p.pid, p.started_at)).map_or_else(|| policy_for(p), |(_, pol)| pol.clone()),
         }
     }
 
@@ -471,9 +475,16 @@ pub struct MonitorHandle {
     listener: Arc<Listener>,
     guard: Option<GuardHandle>,
     thresholds: Arc<RwLock<Thresholds>>,
+    /// Шаг сбора, мс — меняется на лету ([`MonitorHandle::set_tick`]).
+    tick_ms: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl MonitorHandle {
+    /// Сменить шаг сбора на лету: окно видно — чаще, скрыто — реже (сторожу хватает 3 с).
+    pub fn set_tick(&self, tick: Duration) {
+        self.tick_ms.store(tick.as_millis().max(500) as u64, std::sync::atomic::Ordering::Relaxed);
+    }
+
     /// Сменить пороги анализа на лету (действуют со следующего анализа).
     pub fn set_thresholds(&self, t: Thresholds) {
         *self.thresholds.write().unwrap_or_else(|e| e.into_inner()) = t;
@@ -616,7 +627,13 @@ pub fn spawn_guarded(
 
 fn start(cfg: MonitorConfig, listener: Arc<Listener>, guard: Option<GuardHandle>) -> Result<MonitorHandle> {
     let mut monitor = Monitor::new(cfg)?;
-    let handle = MonitorHandle { published: Arc::default(), listener, guard, thresholds: monitor.thresholds.clone() };
+    let handle = MonitorHandle {
+        published: Arc::default(),
+        listener,
+        guard,
+        thresholds: monitor.thresholds.clone(),
+        tick_ms: Arc::new(std::sync::atomic::AtomicU64::new(monitor.cfg.tick.as_millis() as u64)),
+    };
     let worker = handle.clone();
     std::thread::Builder::new()
         .name("rmon-monitor".into())
@@ -652,7 +669,8 @@ fn start(cfg: MonitorConfig, listener: Arc<Listener>, guard: Option<GuardHandle>
                     }
                     Err(e) => eprintln!("rmon: снимок не удался: {e}"),
                 }
-                std::thread::sleep(monitor.cfg.tick.saturating_sub(started.elapsed()));
+                let tick = Duration::from_millis(worker.tick_ms.load(std::sync::atomic::Ordering::Relaxed));
+                std::thread::sleep(tick.saturating_sub(started.elapsed()));
             }
         })
         .map_err(|e| Error::Syscall { call: "thread::spawn", source: e })?;
