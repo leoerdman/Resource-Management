@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/rmon-core", "crates/rmon-cli", "apps/rmon-app/src-tauri"]
+members = ["crates/rmon-core", "crates/rmon-cli", "crates/rmon-mcp","apps/rmon-app/src-tauri"]
 
 [workspace.package]
 version = "0.1.0"

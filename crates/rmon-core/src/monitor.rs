@@ -290,14 +290,55 @@ pub fn limit_args(args: &[String], limit: usize) -> Vec<String> {
     out
 }
 
+/// Процесс коротко — звено цепочки родителей или потомок.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProcBrief {
+    /// Идентификатор процесса.
+    pub pid: i32,
+    /// Имя.
+    pub name: String,
+    /// Время запуска.
+    pub started_at: u64,
+    /// Сколько освободится: footprint, иначе rss.
+    pub reclaim: u64,
+    /// Строка запуска, укороченная ([`crate::analyze::short_cmd`]).
+    pub cmd: String,
+}
+
+impl ProcBrief {
+    fn of(p: &ProcessInfo) -> Self {
+        Self { pid: p.pid, name: p.name.clone(), started_at: p.started_at, reclaim: p.reclaim(), cmd: crate::analyze::short_cmd(p) }
+    }
+}
+
+/// Подробности о процессе для окна и MCP: строка сводки, cwd, родня, ряд памяти.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProcessDetails {
+    /// Как в [`Dashboard`]: рост, политика.
+    pub row: ProcessRow,
+    /// Рабочий каталог (свежее чтение платформы).
+    pub cwd: Option<String>,
+    /// От родителя к init.
+    pub ancestors: Vec<ProcBrief>,
+    /// Все потомки (обход в ширину).
+    pub descendants: Vec<ProcBrief>,
+    /// Сумма памяти потомков.
+    pub descendants_total: u64,
+    /// (t, bytes) из истории анализа.
+    pub series: Vec<(u64, u64)>,
+}
+
 /// Последнее опубликованное состояние.
 #[derive(Default)]
 struct Published {
     dashboard: Option<Arc<Dashboard>>,
     snapshot: Option<Arc<Snapshot>>,
     /// Ряды памяти процессов из истории анализа: (pid, started_at) → [(t, bytes)].
-    series: Arc<HashMap<(i32, u64), Vec<(u64, u64)>>>,
+    series: Arc<SeriesMap>,
 }
+
+/// (pid, started_at) → [(t, bytes)].
+type SeriesMap = HashMap<(i32, u64), Vec<(u64, u64)>>;
 
 type Listener = Box<dyn Fn(&Arc<Dashboard>) + Send + Sync>;
 
@@ -336,6 +377,19 @@ impl MonitorHandle {
         crate::platform::current().ok()?.cwd(pid).ok().flatten()
     }
 
+    /// Подробности о процессе из последней сводки и снимка; `None` — его нет в последнем снимке.
+    pub fn details(&self, pid: i32, started_at: Option<u64>) -> Option<ProcessDetails> {
+        let (dashboard, snap) = {
+            let published = self.published.read().unwrap_or_else(|e| e.into_inner());
+            (published.dashboard.clone()?, published.snapshot.clone()?)
+        };
+        details_from(&dashboard, &snap, pid, started_at).map(|mut d| {
+            d.cwd = self.cwd(pid);
+            d.series = self.series(d.row.pid, d.row.started_at);
+            d
+        })
+    }
+
     /// Снять процесс через защитный слой. Цель ищется в последнем снимке (и сверяется ядром
     /// заново перед сигналом); при успехе сводка сразу обновляется и уходит слушателю.
     pub fn kill(&self, pid: i32, started_at: Option<u64>, req: KillRequest) -> Result<KillOutcome> {
@@ -355,6 +409,15 @@ impl MonitorHandle {
         }
         Ok(outcome)
     }
+}
+
+/// Подробности без платформы (cwd и ряд — пустые): строка сводки и родня из снимка.
+fn details_from(dashboard: &Dashboard, snap: &Snapshot, pid: i32, started_at: Option<u64>) -> Option<ProcessDetails> {
+    let row = dashboard.processes.iter().find(|p| p.pid == pid && started_at.is_none_or(|s| s == p.started_at))?.clone();
+    let ancestors = snap.ancestors(pid).into_iter().map(ProcBrief::of).collect();
+    let descendants: Vec<ProcBrief> = snap.descendants(pid).into_iter().map(ProcBrief::of).collect();
+    let descendants_total = descendants.iter().map(|d| d.reclaim).sum();
+    Some(ProcessDetails { row, cwd: None, ancestors, descendants, descendants_total, series: Vec::new() })
 }
 
 /// Запустить монитор в фоновом потоке. `on_update` вызывается после каждого снимка
@@ -416,6 +479,10 @@ mod tests {
         assert!(d.groups.iter().map(|g| g.count).sum::<usize>() == d.processes.len());
         let me = std::process::id() as i32;
         assert!(!s.ancestors(me).is_empty(), "у теста есть родитель");
+        let det = details_from(&d, &s, me, None).expect("тест есть в снимке");
+        assert_eq!(det.row.pid, me);
+        assert_eq!(det.ancestors.len(), s.ancestors(me).len());
+        assert!(details_from(&d, &s, me, Some(det.row.started_at + 1)).is_none(), "другая личность — нет");
         let cwd = crate::platform::current().unwrap().cwd(me).unwrap();
         assert_eq!(cwd.as_deref(), std::env::current_dir().unwrap().to_str());
     }
