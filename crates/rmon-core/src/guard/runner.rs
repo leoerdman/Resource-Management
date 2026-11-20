@@ -258,15 +258,7 @@ pub fn persist_flags(enabled: Option<bool>, dry_run: Option<bool>, notify: Optio
             table[key] = toml_edit::value(v);
         }
     }
-    let next = doc.to_string();
-    // Проверяем, что получилось валидным для rmon, до записи.
-    Config::parse(&next).map_err(|e| format!("после правки настройки не разбираются: {e}"))?;
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    }
-    let tmp = path.with_extension("toml.tmp");
-    std::fs::write(&tmp, next).map_err(|e| format!("{}: {e}", tmp.display()))?;
-    std::fs::rename(&tmp, &path).map_err(|e| format!("{}: {e}", path.display()))
+    crate::settings::write_validated(&path, &doc.to_string())
 }
 
 type Listener = Arc<dyn Fn(&GuardEvent) + Send + Sync>;
@@ -319,6 +311,11 @@ impl GuardHandle {
             }
             std::thread::sleep(Duration::from_millis(50));
         }
+    }
+
+    /// Перечитать настройки немедленно (после правки из окна).
+    pub fn reload(&self) {
+        let _ = self.tx.send(Msg::Reload);
     }
 
     /// Перенести обязанность старого сторожа в rmon.
@@ -380,6 +377,7 @@ impl Runner {
         self.cfg_mtime = mtime;
         match Config::load().map_err(|e| e.to_string()).and_then(|c| Rules::compile(&c.guard).map(|r| (c, r))) {
             Ok((cfg, rules)) => {
+                config::set_global(cfg.clone());
                 self.cfg = cfg;
                 self.rules = rules;
                 self.cfg_error = None;
@@ -551,7 +549,7 @@ impl Runner {
 /// Запустить сторожа в своём потоке. `on_event` вызывается из потока сторожа.
 pub fn spawn(on_event: impl Fn(&GuardEvent) + Send + Sync + 'static) -> crate::Result<GuardHandle> {
     let (tx, rx) = sync_channel(1);
-    let cfg = config::global().clone();
+    let cfg = (*config::global()).clone();
     let rules = Rules::compile(&cfg.guard).unwrap_or_else(|e| {
         eprintln!("rmon: {e}; сторож на встроенных правилах");
         Rules::compile(&GuardConfig::default()).expect("встроенные правила компилируются")

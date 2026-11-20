@@ -22,6 +22,7 @@ pub mod model;
 pub mod monitor;
 pub mod platform;
 pub mod policy;
+pub mod settings;
 
 pub use error::{Error, Result};
 pub use model::{

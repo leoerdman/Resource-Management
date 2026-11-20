@@ -8,7 +8,7 @@
 //! → свободно.
 
 use std::path::Path;
-use std::sync::OnceLock;
+use std::sync::{Arc, LazyLock, RwLock};
 
 use regex_lite::Regex;
 use serde::{Deserialize, Serialize};
@@ -204,17 +204,24 @@ impl Policy {
     }
 }
 
-static GLOBAL: OnceLock<Policy> = OnceLock::new();
+static GLOBAL: LazyLock<RwLock<(u64, Arc<Policy>)>> = LazyLock::new(|| RwLock::new((u64::MAX, Arc::new(Policy::builtin()))));
 
-/// Политика процесса — строится один раз из [`config::global`].
-pub fn global() -> &'static Policy {
-    GLOBAL.get_or_init(|| {
-        let (policy, errors) = Policy::from_config(config::global());
-        for e in errors {
-            eprintln!("rmon: правило политики пропущено — {e}");
+/// Политика процесса — из [`config::global`]; пересобирается, когда меняется поколение настроек.
+pub fn global() -> Arc<Policy> {
+    let generation = config::generation();
+    {
+        let cur = GLOBAL.read().unwrap_or_else(|e| e.into_inner());
+        if cur.0 == generation {
+            return cur.1.clone();
         }
-        policy
-    })
+    }
+    let (policy, errors) = Policy::from_config(&config::global());
+    for e in errors {
+        eprintln!("rmon: правило политики пропущено — {e}");
+    }
+    let policy = Arc::new(policy);
+    *GLOBAL.write().unwrap_or_else(|e| e.into_inner()) = (generation, policy.clone());
+    policy
 }
 
 /// Политика для процесса. Одно место для CLI, MCP и окна.

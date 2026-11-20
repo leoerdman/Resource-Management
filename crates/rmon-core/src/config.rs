@@ -23,7 +23,7 @@
 //! Конфиг может только ужесточить политику: сделать процесс `Free` из него нельзя.
 
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Arc, LazyLock, RwLock};
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -82,6 +82,8 @@ pub struct Config {
     pub paths: PathsConfig,
     /// Сторож памяти.
     pub guard: crate::guard::GuardConfig,
+    /// Приложение: автозапуск, значок.
+    pub app: crate::settings::AppConfig,
 }
 
 impl Config {
@@ -105,17 +107,37 @@ impl Config {
     }
 }
 
-static GLOBAL: OnceLock<Config> = OnceLock::new();
+/// Действующие настройки процесса и их поколение (растёт при каждой замене).
+struct Current {
+    config: Arc<Config>,
+    generation: u64,
+}
 
-/// Настройки процесса: читаются один раз. Ошибка файла — в stderr и значения по умолчанию;
-/// чтобы показать её человеку явно, вызовите [`Config::load`] (так делает `rmon config`).
-pub fn global() -> &'static Config {
-    GLOBAL.get_or_init(|| {
-        Config::load().unwrap_or_else(|e| {
-            eprintln!("rmon: {e}; действуют настройки по умолчанию");
-            Config::default()
-        })
-    })
+static CURRENT: LazyLock<RwLock<Current>> = LazyLock::new(|| {
+    let config = Config::load().unwrap_or_else(|e| {
+        eprintln!("rmon: {e}; действуют настройки по умолчанию");
+        Config::default()
+    });
+    RwLock::new(Current { config: Arc::new(config), generation: 0 })
+});
+
+/// Действующие настройки процесса. Читаются из файла при первом обращении; ошибка файла —
+/// в stderr и значения по умолчанию (показать её явно — [`Config::load`], так делает `rmon config`).
+/// Меняются через [`set_global`] — тогда же пересобирается политика снятия.
+pub fn global() -> Arc<Config> {
+    CURRENT.read().unwrap_or_else(|e| e.into_inner()).config.clone()
+}
+
+/// Поколение настроек: кэши, построенные из них (политика), сверяют его и пересобираются.
+pub fn generation() -> u64 {
+    CURRENT.read().unwrap_or_else(|e| e.into_inner()).generation
+}
+
+/// Заменить действующие настройки (после сохранения из окна или перечитывания файла).
+pub fn set_global(config: Config) {
+    let mut cur = CURRENT.write().unwrap_or_else(|e| e.into_inner());
+    cur.config = Arc::new(config);
+    cur.generation += 1;
 }
 
 fn env_path(var: &str) -> Option<PathBuf> {

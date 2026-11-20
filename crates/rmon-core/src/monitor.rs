@@ -192,6 +192,8 @@ pub struct Monitor {
     growth: HashMap<(i32, u64), f64>,
     /// Каталоги dev-процессов по личности: читаются один раз за жизнь процесса.
     cwds: HashMap<(i32, u64), Option<String>>,
+    /// Пороги — общие с ручкой, чтобы менять их на лету из настроек.
+    thresholds: Arc<RwLock<Thresholds>>,
     ticks: u64,
 }
 
@@ -205,6 +207,7 @@ impl Monitor {
     pub fn with_collector(collector: Collector, cfg: MonitorConfig) -> Self {
         Self {
             history: History::slim(cfg.analyze_window),
+            thresholds: Arc::new(RwLock::new(cfg.thresholds.clone())),
             collector,
             cfg,
             chart: VecDeque::new(),
@@ -234,7 +237,8 @@ impl Monitor {
         let analyzed = self.ticks >= 2 && (self.ticks - 2).is_multiple_of(u64::from(self.cfg.analyze_every.max(1)));
         if analyzed {
             self.history.push(snap.clone());
-            self.suspects = analyze(&self.history, &self.cfg.thresholds);
+            let thresholds = self.thresholds.read().unwrap_or_else(|e| e.into_inner()).clone();
+            self.suspects = analyze(&self.history, &thresholds);
             self.growth = growth_rates(&self.history);
         }
         self.refresh_cwds(&snap);
@@ -409,9 +413,15 @@ pub struct MonitorHandle {
     published: Arc<RwLock<Published>>,
     listener: Arc<Listener>,
     guard: Option<GuardHandle>,
+    thresholds: Arc<RwLock<Thresholds>>,
 }
 
 impl MonitorHandle {
+    /// Сменить пороги анализа на лету (действуют со следующего анализа).
+    pub fn set_thresholds(&self, t: Thresholds) {
+        *self.thresholds.write().unwrap_or_else(|e| e.into_inner()) = t;
+    }
+
     /// Сторож памяти, если монитор запущен с ним ([`spawn_guarded`]).
     pub fn guard(&self) -> Option<&GuardHandle> {
         self.guard.as_ref()
@@ -507,7 +517,7 @@ pub fn spawn_guarded(
 
 fn start(cfg: MonitorConfig, listener: Arc<Listener>, guard: Option<GuardHandle>) -> Result<MonitorHandle> {
     let mut monitor = Monitor::new(cfg)?;
-    let handle = MonitorHandle { published: Arc::default(), listener, guard };
+    let handle = MonitorHandle { published: Arc::default(), listener, guard, thresholds: monitor.thresholds.clone() };
     let worker = handle.clone();
     std::thread::Builder::new()
         .name("rmon-monitor".into())
