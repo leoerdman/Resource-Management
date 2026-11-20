@@ -3,8 +3,10 @@
 # `cargo fmt --check` здесь нет намеренно: репозиторий отформатирован шире rustfmt по умолчанию
 # (rustfmt.toml нет, `cargo fmt --check` даёт ~100 диффов). Появится rustfmt.toml — добавить шаг.
 #
-# Node 24 (npm 11), а не 22: package-lock.json записан npm 11, и `npm ci` из npm 10 на нём
-# падает («Missing: @emnapi/core … from lock file» — необязательные peer-зависимости wasm-сборки vite).
+# npm закреплён на 11.6.2 (Node 24): apps/rmon-app/package-lock.json записан им, и в нём нет
+# записей `@emnapi/core|runtime@2.0.0-beta.2` (необязательная wasm-сборка rolldown). npm 10 и
+# npm ≥ 11.2x на таком lock-файле падают в `npm ci` («Missing: @emnapi/core … from lock file»).
+# Когда lock-файл перегенерируют свежим npm (`npm install` в apps/rmon-app) — закрепление убрать.
 name: CI
 
 # Любая ветка: полосы гоняют CI на своих ветках до слияния в main.
@@ -21,6 +23,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  NPM_VERSION: 11.6.2
   CARGO_INCREMENTAL: 0
   RUST_BACKTRACE: 1
 
@@ -52,6 +55,8 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: apps/rmon-app/package-lock.json
+      # См. шапку: npm той версии, что записала package-lock.json.
+      - run: npm install -g npm@${{ env.NPM_VERSION }}
 
       # Крейт окна требует собранный фронтенд (frontendDist = ../dist).
       - name: Фронтенд для tauri-build
@@ -103,6 +108,8 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: apps/rmon-app/package-lock.json
+      # См. шапку: npm той версии, что записала package-lock.json.
+      - run: npm install -g npm@${{ env.NPM_VERSION }}
       - run: npm ci
       - run: npm run build
       - run: npm test --if-present

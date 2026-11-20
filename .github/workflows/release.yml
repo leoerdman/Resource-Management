@@ -13,6 +13,7 @@
 # Форматы задаются здесь через `--bundles`, а не в tauri.conf.json: macOS — .app + .dmg,
 # Windows — .msi + .exe (NSIS), Linux — .AppImage + .deb.
 # Sidecar CLI (`rmon`) собирает beforeBuildCommand из tauri.conf.json под цель `--target`.
+# NPM_VERSION — почему закреплён, см. шапку ci.yml.
 name: Release
 
 on:
@@ -25,6 +26,7 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  NPM_VERSION: 11.6.2
 
 jobs:
   build:
@@ -73,6 +75,8 @@ jobs:
           node-version: 24
           cache: npm
           cache-dependency-path: apps/rmon-app/package-lock.json
+      # См. шапку: npm той версии, что записала package-lock.json.
+      - run: npm install -g npm@${{ env.NPM_VERSION }}
 
       - name: Зависимости фронтенда
         working-directory: apps/rmon-app
