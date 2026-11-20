@@ -19,40 +19,23 @@ pub enum Error {
 
     /// Ответ системы не разобрался (неожидаемый размер, битые данные).
     #[error("не удалось прочитать {what}: {detail}")]
-    Invalid {
-        what: &'static str,
-        detail: String,
-    },
+    Invalid { what: &'static str, detail: String },
 
     /// Процесс исчез между снимком и действием.
     #[error("процесс {pid} уже завершился")]
     ProcessGone { pid: i32 },
 
     /// На месте снимка оказался другой процесс: pid переиспользован.
-    #[error(
-        "процесс {pid} подменился: ожидался запуск {expected}, сейчас {actual} — снятие отменено"
-    )]
-    IdentityMismatch {
-        pid: i32,
-        expected: u64,
-        actual: u64,
-    },
+    #[error("процесс {pid} подменился: ожидался запуск {expected}, сейчас {actual} — снятие отменено")]
+    IdentityMismatch { pid: i32, expected: u64, actual: u64 },
 
     /// Политика запрещает снятие при любом подтверждении.
     #[error("снятие {pid} ({name}) запрещено: {reason}")]
-    Protected {
-        pid: i32,
-        name: String,
-        reason: String,
-    },
+    Protected { pid: i32, name: String, reason: String },
 
     /// Политика требует явного подтверждения.
     #[error("снятие {pid} ({name}) требует подтверждения: {reason}; повторите с confirm")]
-    ConfirmationRequired {
-        pid: i32,
-        name: String,
-        reason: String,
-    },
+    ConfirmationRequired { pid: i32, name: String, reason: String },
 
     /// Нет прав на сигнал: чужой или root-процесс.
     #[error("нет прав на снятие {pid}: {source}")]
@@ -78,18 +61,12 @@ pub enum Error {
 impl Error {
     /// Ошибка системного вызова с именем вызова — единственный способ узнать, что именно упало.
     pub fn syscall(call: &'static str) -> Self {
-        Self::Syscall {
-            call,
-            source: std::io::Error::last_os_error(),
-        }
+        Self::Syscall { call, source: std::io::Error::last_os_error() }
     }
 
     /// Ошибка ввода-вывода без errno (файлы журнала, пути).
     pub fn journal(path: impl Into<PathBuf>, source: std::io::Error) -> Self {
-        Self::Journal {
-            path: path.into(),
-            source,
-        }
+        Self::Journal { path: path.into(), source }
     }
 }
 

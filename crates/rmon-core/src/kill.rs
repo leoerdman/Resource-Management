@@ -104,10 +104,18 @@ pub fn kill_with(platform: &mut dyn Platform, target: &ProcessInfo, req: KillReq
 fn kill_inner(platform: &mut dyn Platform, target: &ProcessInfo, req: &KillRequest) -> Result<KillOutcome> {
     let current = platform.process(target.pid)?.ok_or(Error::ProcessGone { pid: target.pid })?;
     if !current.same_identity(target) && current.started_at != target.started_at {
-        return Err(Error::IdentityMismatch { pid: target.pid, expected: target.started_at, actual: current.started_at });
+        return Err(Error::IdentityMismatch {
+            pid: target.pid,
+            expected: target.started_at,
+            actual: current.started_at,
+        });
     }
     if current.args != target.args && !target.args.is_empty() && !current.args.is_empty() {
-        return Err(Error::IdentityMismatch { pid: target.pid, expected: target.started_at, actual: current.started_at });
+        return Err(Error::IdentityMismatch {
+            pid: target.pid,
+            expected: target.started_at,
+            actual: current.started_at,
+        });
     }
     match policy_for(&current) {
         KillPolicy::Protected(reason) => {
@@ -127,7 +135,12 @@ fn kill_inner(platform: &mut dyn Platform, target: &ProcessInfo, req: &KillReque
             exited: false,
             reclaimed,
             dry_run: true,
-            message: format!("снял бы {} ({}), освободилось бы {}", current.name, current.pid, crate::fmt::bytes(reclaimed)),
+            message: format!(
+                "снял бы {} ({}), освободилось бы {}",
+                current.name,
+                current.pid,
+                crate::fmt::bytes(reclaimed)
+            ),
         });
     }
 
@@ -146,9 +159,16 @@ fn kill_inner(platform: &mut dyn Platform, target: &ProcessInfo, req: &KillReque
             wait_exit(platform, current.pid, Duration::from_secs(2))?;
         }
     }
-    let exited = !platform.alive(current.pid)? || platform.process(current.pid)?.is_none_or(|p| p.started_at != current.started_at);
+    let exited = !platform.alive(current.pid)?
+        || platform.process(current.pid)?.is_none_or(|p| p.started_at != current.started_at);
     let message = if exited {
-        format!("{} ({}) снят {}, освободилось ~{}", current.name, current.pid, signal.as_str(), crate::fmt::bytes(reclaimed))
+        format!(
+            "{} ({}) снят {}, освободилось ~{}",
+            current.name,
+            current.pid,
+            signal.as_str(),
+            crate::fmt::bytes(reclaimed)
+        )
     } else {
         format!("{} ({}) не завершился после {}", current.name, current.pid, signal.as_str())
     };
@@ -218,7 +238,9 @@ mod tests {
         assert!(kill_with(plat.as_mut(), &launchd, KillRequest::default()).is_err());
         // Пожинаем ребёнка в фоне, иначе он останется зомби и «живым» для kill(0).
         let reaper = std::thread::spawn(move || child.wait());
-        let out = kill_with(plat.as_mut(), &info, KillRequest { reason: "тест".into(), confirm: true, ..Default::default() }).unwrap();
+        let out =
+            kill_with(plat.as_mut(), &info, KillRequest { reason: "тест".into(), confirm: true, ..Default::default() })
+                .unwrap();
         assert!(out.exited, "{}", out.message);
         reaper.join().unwrap().unwrap();
     }

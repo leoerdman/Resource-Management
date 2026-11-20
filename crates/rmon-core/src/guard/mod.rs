@@ -44,6 +44,7 @@ pub struct RedConfig {
     /// Страховка: доступно не больше, %.
     pub min_available_pct: u8,
     /// Страховка: своп не меньше, МБ…
+    #[ts(type = "number")]
     pub swap_red_mb: u64,
     /// …при давлении от этого уровня.
     pub swap_red_from_level: u8,
@@ -61,6 +62,7 @@ impl Default for RedConfig {
 #[ts(export, rename = "GuardLimit")]
 pub struct Limit {
     /// Окно, секунды.
+    #[ts(type = "number")]
     pub window_secs: u64,
     /// Не больше стольких убийств.
     pub max: u32,
@@ -142,9 +144,11 @@ fn never(name: &str, exe: Option<&str>, path: Option<&str>, args: Option<&str>) 
 }
 
 /// Серверы и watch — не прогоны.
-const SERVERISH: &str = r"(^|\s)(serve|dev|start|preview)(\s|$)|--(watch|hot|inspect)\b|mcp-server|(^|/)server\.[cm]?[jt]s(\s|$)";
+const SERVERISH: &str =
+    r"(^|\s)(serve|dev|start|preview)(\s|$)|--(watch|hot|inspect)\b|mcp-server|(^|/)server\.[cm]?[jt]s(\s|$)";
 /// Родители, под которыми node/bun — не прогон: launchd, приложения, сессии агентов.
-const APPISH_PARENT: &str = r"^/sbin/launchd$|^/Applications/|/[Cc]laude\.app/Contents/MacOS/|(^|/)(claude|mcode|mcode-engine)$";
+const APPISH_PARENT: &str =
+    r"^/sbin/launchd$|^/Applications/|/[Cc]laude\.app/Contents/MacOS/|(^|/)(claude|mcode|mcode-engine)$";
 
 /// Встроенное «можно» — перенесено из `memory-guard/config.json` как есть.
 pub fn default_allow() -> Vec<AllowRule> {
@@ -239,7 +243,9 @@ impl Default for GuardConfig {
 pub fn never_as_policy_rules(never: &[RuleSpec]) -> Vec<RuleSpec> {
     let mut out = Vec::new();
     for r in never {
-        for (exe, path, args) in [(r.exe.clone(), None, None), (None, r.path.clone(), None), (None, None, r.args.clone())] {
+        for (exe, path, args) in
+            [(r.exe.clone(), None, None), (None, r.path.clone(), None), (None, None, r.args.clone())]
+        {
             if exe.is_some() || path.is_some() || args.is_some() {
                 out.push(RuleSpec { name: r.name.clone(), exe, path, args });
             }
@@ -456,7 +462,12 @@ fn never_match<'a>(p: &ProcessInfo, cmd: &str, rules: &'a [CompiledNever]) -> Op
         .map(|r| r.name.as_str())
 }
 
-fn allow_match(p: &ProcessInfo, cmd: &str, parent_exe: Option<&str>, rules: &[CompiledAllow]) -> Result<String, String> {
+fn allow_match(
+    p: &ProcessInfo,
+    cmd: &str,
+    parent_exe: Option<&str>,
+    rules: &[CompiledAllow],
+) -> Result<String, String> {
     let base = exe_base(p);
     let mut why = None;
     for r in rules {
@@ -541,7 +552,13 @@ fn rank_victims_with(
             note(format!("политика rmon: {} ({})", pol.label(), pol.reason()));
             continue;
         }
-        candidates.push(Candidate { pid: p.pid, started_at: p.started_at, kind, mem, cmd: crate::analyze::short_cmd(p) });
+        candidates.push(Candidate {
+            pid: p.pid,
+            started_at: p.started_at,
+            kind,
+            mem,
+            cmd: crate::analyze::short_cmd(p),
+        });
     }
     candidates.sort_by_key(|c| std::cmp::Reverse(c.mem));
     rejected.sort_by_key(|r| std::cmp::Reverse(r.mem));
@@ -608,7 +625,14 @@ pub struct Observation {
 
 impl Guard {
     /// Один опрос.
-    pub fn observe(&mut self, cfg: &GuardConfig, rules: &Rules, snap: &Snapshot, self_pid: i32, now_ms: u64) -> Observation {
+    pub fn observe(
+        &mut self,
+        cfg: &GuardConfig,
+        rules: &Rules,
+        snap: &Snapshot,
+        self_pid: i32,
+        now_ms: u64,
+    ) -> Observation {
         self.observe_with(cfg, rules, snap, self_pid, now_ms, policy_for)
     }
 
@@ -641,7 +665,9 @@ impl Guard {
         exclude.extend(&self.denied);
         let (candidates, rejected) = rank_victims_with(snap, rules, &exclude, policy);
         match candidates.into_iter().next() {
-            Some(victim) => obs(Decision::Act { victim, why: zone_why.clone(), red_for_secs: self.hyst.red_for_ms(now_ms) / 1000 }),
+            Some(victim) => {
+                obs(Decision::Act { victim, why: zone_why.clone(), red_for_secs: self.hyst.red_for_ms(now_ms) / 1000 })
+            }
             None if self.noted.insert("none") => {
                 obs(Decision::NoVictim { why: zone_why.clone(), rejected: rejected.into_iter().take(8).collect() })
             }

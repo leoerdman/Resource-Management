@@ -4,7 +4,8 @@ use super::author::{Env, chain_of, origin_of, project_from_path};
 use super::*;
 use crate::model::{GIB, ProcState, SystemMemory};
 
-const CLAUDE_CLI: &str = "/Users/u/Library/Application Support/Claude/claude-code/2.1.321/x/claude.app/Contents/MacOS/claude";
+const CLAUDE_CLI: &str =
+    "/Users/u/Library/Application Support/Claude/claude-code/2.1.321/x/claude.app/Contents/MacOS/claude";
 
 fn p(pid: i32, ppid: i32, exe: &str, args: &str, mb: u64) -> ProcessInfo {
     let name = Path::new(exe).file_name().and_then(|n| n.to_str()).unwrap_or(exe).to_string();
@@ -29,26 +30,86 @@ fn p(pid: i32, ppid: i32, exe: &str, args: &str, mb: u64) -> ProcessInfo {
 /// Снимок, похожий на инцидент: tsgo 4,7 ГБ, node --test по 3,5, Telegram, Claude, bun-сервер, MCP.
 fn incident() -> Vec<ProcessInfo> {
     vec![
-        p(46610, 1, "/Applications/Claude.app/Contents/MacOS/Claude", "/Applications/Claude.app/Contents/MacOS/Claude", 900),
-        p(47355, 46610, "/Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer)", "Claude Helper (Renderer) --type=renderer", 2500),
-        p(744, 46610, "/Applications/Claude.app/Contents/Helpers/disclaimer", "/Applications/Claude.app/Contents/Helpers/disclaimer --pgroup -- claude", 5),
-        p(746, 744, CLAUDE_CLI, &format!("{CLAUDE_CLI} --output-format stream-json --resume=6db26558-4d99-4d9f-9442-d4847f6eb3d7"), 350),
+        p(
+            46610,
+            1,
+            "/Applications/Claude.app/Contents/MacOS/Claude",
+            "/Applications/Claude.app/Contents/MacOS/Claude",
+            900,
+        ),
+        p(
+            47355,
+            46610,
+            "/Applications/Claude.app/Contents/Frameworks/Claude Helper (Renderer).app/Contents/MacOS/Claude Helper (Renderer)",
+            "Claude Helper (Renderer) --type=renderer",
+            2500,
+        ),
+        p(
+            744,
+            46610,
+            "/Applications/Claude.app/Contents/Helpers/disclaimer",
+            "/Applications/Claude.app/Contents/Helpers/disclaimer --pgroup -- claude",
+            5,
+        ),
+        p(
+            746,
+            744,
+            CLAUDE_CLI,
+            &format!("{CLAUDE_CLI} --output-format stream-json --resume=6db26558-4d99-4d9f-9442-d4847f6eb3d7"),
+            350,
+        ),
         p(42503, 746, "/bin/zsh", "/bin/zsh -c source snapshot.sh && bun script/check_unused_declarations.ts", 3),
         p(43217, 42503, "bun", "bun script/check_unused_declarations.ts", 80),
-        p(43341, 43217, "node", "node /Users/u/Programming - Main/M Code/TEMPORARY/mcode/lanes/START/MCodeDesktop/node_modules/.bin/tsgo --noEmit", 60),
-        p(43346, 43341, "/Users/u/Programming - Main/M Code/MCodeDesktop/node_modules/@typescript/native-preview-darwin-arm64/lib/tsgo", "/Users/u/.../lib/tsgo --noEmit --incremental", 4700),
+        p(
+            43341,
+            43217,
+            "node",
+            "node /Users/u/Programming - Main/M Code/TEMPORARY/mcode/lanes/START/MCodeDesktop/node_modules/.bin/tsgo --noEmit",
+            60,
+        ),
+        p(
+            43346,
+            43341,
+            "/Users/u/Programming - Main/M Code/MCodeDesktop/node_modules/@typescript/native-preview-darwin-arm64/lib/tsgo",
+            "/Users/u/.../lib/tsgo --noEmit --incremental",
+            4700,
+        ),
         p(92100, 746, "/bin/zsh", "/bin/zsh -c timeout 900 xargs -0 node --test", 3),
-        p(92188, 92100, "node", "node --test /Users/u/Programming - Main/Auto Reels Infinity/.claude/worktrees/drum-mask/engine/tests/a.test.mjs", 70),
+        p(
+            92188,
+            92100,
+            "node",
+            "node --test /Users/u/Programming - Main/Auto Reels Infinity/.claude/worktrees/drum-mask/engine/tests/a.test.mjs",
+            70,
+        ),
         p(92201, 92188, "/usr/local/bin/node", "/usr/local/bin/node --test-concurrency=0 a.test.mjs", 3600),
         p(93683, 92188, "/usr/local/bin/node", "/usr/local/bin/node --test-concurrency=0 b.test.mjs", 3200),
         p(38496, 92100, "bun", "bun test --timeout 30000 test/server/a.test.ts", 1600),
         p(50000, 42503, "bun", "bun run src/index.ts serve --port 4096", 3000),
         p(50001, 746, "node", "node /Users/u/.npm/_npx/x/index.js", 2000),
-        p(50002, 46610, "/Applications/Claude.app/Contents/Resources/node", "/Applications/Claude.app/Contents/Resources/node helper.js", 6000),
+        p(
+            50002,
+            46610,
+            "/Applications/Claude.app/Contents/Resources/node",
+            "/Applications/Claude.app/Contents/Resources/node helper.js",
+            6000,
+        ),
         p(54291, 1, "/Applications/Telegram Lite.app/Contents/MacOS/Telegram Lite", "Telegram Lite", 2600),
-        p(407, 1, "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer", "WindowServer -daemon", 900),
+        p(
+            407,
+            1,
+            "/System/Library/PrivateFrameworks/SkyLight.framework/Resources/WindowServer",
+            "WindowServer -daemon",
+            900,
+        ),
         p(87541, 1, "/opt/homebrew/bin/python3.11", "python3.11 worker.py", 1200),
-        p(60000, 1, "/Users/u/.bun/bin/bun", "/Users/u/.bun/bin/bun /Users/u/Programming - Main/Hooks/memory-guard/guard.ts", 30),
+        p(
+            60000,
+            1,
+            "/Users/u/.bun/bin/bun",
+            "/Users/u/.bun/bin/bun /Users/u/Programming - Main/Hooks/memory-guard/guard.ts",
+            30,
+        ),
         p(61000, 1, "/Applications/M Code Desktop.app/Contents/Resources/bin/mcode-engine", "mcode-engine serve", 5000),
         p(61001, 61000, "/bin/zsh", "/bin/zsh -c bun test", 3),
         p(61002, 61001, "bun", "bun test packages/engine", 2900),
@@ -61,7 +122,13 @@ fn snap(procs: Vec<ProcessInfo>, mem: SystemMemory) -> Snapshot {
 }
 
 fn sys(pressure: Pressure, available_pct: u8, swap_gb: f64) -> SystemMemory {
-    SystemMemory { total: 24 * GIB, pressure, available_pct, swap_used: (swap_gb * GIB as f64) as u64, ..Default::default() }
+    SystemMemory {
+        total: 24 * GIB,
+        pressure,
+        available_pct,
+        swap_used: (swap_gb * GIB as f64) as u64,
+        ..Default::default()
+    }
 }
 
 /// Политика в тестах: всё свободно, кроме того, что решает сам сторож.
@@ -190,7 +257,8 @@ fn small_is_not_a_victim() {
 fn rmon_policy_is_an_extra_fence() {
     let s = snap(incident(), sys(Pressure::Critical, 4, 10.0));
     let rules = Rules::compile(&GuardConfig::default()).unwrap();
-    let confirm_tsgo = |p: &ProcessInfo| if p.pid == 43346 { KillPolicy::Confirm("тест".into()) } else { KillPolicy::Free };
+    let confirm_tsgo =
+        |p: &ProcessInfo| if p.pid == 43346 { KillPolicy::Confirm("тест".into()) } else { KillPolicy::Free };
     let (c, rejected) = rank_victims_with(&s, &rules, &HashSet::new(), confirm_tsgo);
     assert_eq!(c[0].pid, 92201);
     assert!(rejected.iter().find(|r| r.pid == 43346).unwrap().why.starts_with("политика rmon"));
@@ -265,18 +333,34 @@ fn origin_claude_code_session() {
 #[test]
 fn origin_mcode_launchagent_terminal_orphan() {
     let s = chain(&incident(), 61002);
-    assert!(matches!(origin_of(&chain_of(&s, 61002), &Env::new(), &Env::new()), author::Origin::Mcode { session_pid: Some(61000), .. }));
+    assert!(matches!(
+        origin_of(&chain_of(&s, 61002), &Env::new(), &Env::new()),
+        author::Origin::Mcode { session_pid: Some(61000), .. }
+    ));
     let env = |k: &str, v: &str| -> Env { [(k.to_string(), v.to_string())].into_iter().collect() };
-    let job = snap(vec![p(70001, 70000, "node", "node gate.mjs", 1), p(70000, 1, "/usr/bin/python3", "python3 mac_jobs.py", 1)], SystemMemory::default());
+    let job = snap(
+        vec![p(70001, 70000, "node", "node gate.mjs", 1), p(70000, 1, "/usr/bin/python3", "python3 mac_jobs.py", 1)],
+        SystemMemory::default(),
+    );
     assert_eq!(
-        origin_of(&chain_of(&job, 70001), &env("XPC_SERVICE_NAME", "com.auto-reels-infinity.nightly-gate"), &Env::new()),
+        origin_of(
+            &chain_of(&job, 70001),
+            &env("XPC_SERVICE_NAME", "com.auto-reels-infinity.nightly-gate"),
+            &Env::new()
+        ),
         author::Origin::LaunchAgent { label: "com.auto-reels-infinity.nightly-gate".into() }
     );
     let term = snap(
-        vec![p(3, 2, "node", "node x", 1), p(2, 1, "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal", "Terminal", 1)],
+        vec![
+            p(3, 2, "node", "node x", 1),
+            p(2, 1, "/System/Applications/Utilities/Terminal.app/Contents/MacOS/Terminal", "Terminal", 1),
+        ],
         SystemMemory::default(),
     );
-    assert_eq!(origin_of(&chain_of(&term, 3), &Env::new(), &Env::new()), author::Origin::Terminal { app: "Terminal".into() });
+    assert_eq!(
+        origin_of(&chain_of(&term, 3), &Env::new(), &Env::new()),
+        author::Origin::Terminal { app: "Terminal".into() }
+    );
     let orphan = snap(vec![p(5, 1, "tsgo", "tsgo --noEmit", 1)], SystemMemory::default());
     assert_eq!(origin_of(&chain_of(&orphan, 5), &env("XPC_SERVICE_NAME", "0"), &Env::new()), author::Origin::Orphan);
 }
@@ -291,12 +375,24 @@ fn project_lane_worktree_scratchpad() {
         project_from_path(Some("/Users/u/Programming - Main/Auto Reels Infinity/.claude/worktrees/drum-mask")),
         (Some("Auto Reels Infinity".into()), Some("drum-mask".into()))
     );
-    assert_eq!(project_from_path(Some("/private/tmp/claude-501/-Users-u-Programming---Main-M-Code/abc/scratchpad")).0.as_deref(), Some("M Code"));
+    assert_eq!(
+        project_from_path(Some("/private/tmp/claude-501/-Users-u-Programming---Main-M-Code/abc/scratchpad"))
+            .0
+            .as_deref(),
+        Some("M Code")
+    );
 }
 
 #[test]
 fn never_rules_split_for_policy() {
-    let rules = never_as_policy_rules(&[RuleSpec { name: "x".into(), exe: Some("a".into()), path: None, args: Some("b".into()) }]);
+    let rules = never_as_policy_rules(&[RuleSpec {
+        name: "x".into(),
+        exe: Some("a".into()),
+        path: None,
+        args: Some("b".into()),
+    }]);
     assert_eq!(rules.len(), 2);
-    assert!(rules.iter().all(|r| [r.exe.is_some(), r.path.is_some(), r.args.is_some()].iter().filter(|&&b| b).count() == 1));
+    assert!(
+        rules.iter().all(|r| [r.exe.is_some(), r.path.is_some(), r.args.is_some()].iter().filter(|&&b| b).count() == 1)
+    );
 }

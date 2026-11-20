@@ -40,7 +40,15 @@ pub fn labels() -> Labels {
         suspect_kind: SuspectKind::ALL.iter().map(|k| (key(k), k.label())).collect(),
         policy: [KillPolicy::Protected(String::new()), KillPolicy::Confirm(String::new()), KillPolicy::Free]
             .iter()
-            .map(|p| (serde_json::to_value(p).ok().and_then(|v| v["kind"].as_str().map(str::to_owned)).unwrap_or_default(), p.label()))
+            .map(|p| {
+                (
+                    serde_json::to_value(p)
+                        .ok()
+                        .and_then(|v| v["kind"].as_str().map(str::to_owned))
+                        .unwrap_or_default(),
+                    p.label(),
+                )
+            })
             .collect(),
     }
 }

@@ -7,7 +7,7 @@ export type GuardLimit = {
 /**
  * Окно, секунды.
  */
-window_secs: bigint, 
+window_secs: number, 
 /**
  * Не больше стольких убийств.
  */

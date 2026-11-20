@@ -1,6 +1,6 @@
 import { memo, useCallback, useMemo, useState, type ReactNode } from "react";
-import { cmdHint, fmtBytes, GENERIC_NAMES, KIND_LABEL, plural, POLICY_LABEL } from "../format";
-import type { KillPolicy, KillTarget, ProcKey, Suspect, SuspectKind } from "../types";
+import { cmdHint, cwdShort, fmtBytes, GENERIC_NAMES, KIND_LABEL, plural, POLICY_LABEL } from "../format";
+import type { KillPolicy, KillTarget, ProcessRow, ProcKey, Suspect, SuspectKind } from "../types";
 import { KillButton, LockIcon, PolicyTag } from "./Kill";
 import type { KillRequest } from "./KillDialog";
 
@@ -19,6 +19,9 @@ interface Item {
   kinds: SuspectKind[];
   reasons: string[];
   group: string | null;
+  groupLabel: string | null;
+  /** Working directory (dev processes only) — tells which project a `claude`/`node` belongs to. */
+  cwd: string | null;
 }
 
 /** Abandoned copies of one command (same `Suspect.group`). */
@@ -27,6 +30,10 @@ interface Group {
   items: Item[];
   name: string;
   hint: string;
+  /** From Rust (`Suspect.group_label`), else built here. */
+  label: string;
+  /** Shared working directory of all copies, if they agree. */
+  cwd: string | null;
   score: number;
   reclaim: number;
   kinds: SuspectKind[];
@@ -51,7 +58,7 @@ function hintFor(name: string, cmd: string): string {
   return GENERIC_NAMES.has(name) ? cmdHint(name, cmd) : "";
 }
 
-function buildEntries(suspects: Suspect[]): Entry[] {
+function buildEntries(suspects: Suspect[], cwdOf: Map<number, string | null>): Entry[] {
   const byProc = new Map<string, Item>();
   for (const s of suspects) {
     const key = `${s.pid}:${s.started_at}`;
@@ -62,6 +69,7 @@ function buildEntries(suspects: Suspect[]): Entry[] {
       it.score = Math.max(it.score, s.score);
       it.reclaim = Math.max(it.reclaim, s.reclaim);
       it.group ??= s.group;
+      it.groupLabel ??= s.group_label;
     } else {
       byProc.set(key, {
         key,
@@ -77,6 +85,8 @@ function buildEntries(suspects: Suspect[]): Entry[] {
         kinds: [s.kind],
         reasons: [s.reason],
         group: s.group,
+        groupLabel: s.group_label,
+        cwd: cwdOf.get(s.pid) ?? null,
       });
     }
   }
@@ -103,13 +113,19 @@ function buildEntries(suspects: Suspect[]): Entry[] {
       items.find((i) => i.policy.kind === "protected")?.policy ??
       items.find((i) => i.policy.kind === "confirm")?.policy ??
       items[0].policy;
+    const hint = hintFor(items[0].name, items[0].cmd) || items[0].cmd.slice(0, 60);
+    const label =
+      items.find((i) => i.groupLabel)?.groupLabel ??
+      `${items.length} ${plural(items.length, "брошенная копия", "брошенные копии", "брошенных копий")} «${hint}»`;
     out.push({
       t: "group",
       g: {
         key,
         items,
         name: items[0].name,
-        hint: hintFor(items[0].name, items[0].cmd) || items[0].cmd.slice(0, 60),
+        hint,
+        label,
+        cwd: items.every((i) => i.cwd === items[0].cwd) ? items[0].cwd : null,
         score: Math.max(...items.map((i) => i.score)),
         reclaim: items.reduce((a, i) => a + i.reclaim, 0),
         kinds,
@@ -137,7 +153,19 @@ function targetOf(it: Item): KillTarget {
 }
 
 function groupTitle(g: Group): string {
-  return `${g.items.length} ${plural(g.items.length, "брошенная копия", "брошенные копии", "брошенных копий")} «${g.hint}»`;
+  return g.label;
+}
+
+/** Project folder chip; full path on hover. */
+function CwdChip({ cwd }: { cwd: string | null }) {
+  const short = cwdShort(cwd);
+  // The bare home folder says nothing about the project — skip it.
+  if (!short || short === "~") return null;
+  return (
+    <span className="cwd-chip" title={cwd ?? undefined}>
+      {short}
+    </span>
+  );
 }
 
 function killGroup(g: Group, onKill: (r: KillRequest) => void) {
@@ -146,11 +174,12 @@ function killGroup(g: Group, onKill: (r: KillRequest) => void) {
 
 interface Props {
   suspects: Suspect[];
+  processes: ProcessRow[];
   onKill: (r: KillRequest) => void;
   onOpen: (k: ProcKey) => void;
 }
 
-export const SuspectsTab = memo(function SuspectsTab({ suspects, onKill, onOpen }: Props) {
+export const SuspectsTab = memo(function SuspectsTab({ suspects, processes, onKill, onOpen }: Props) {
   const [view, setView] = useState<View>(loadView);
   const [sortKey, setSortKey] = useState<SortKey>("score");
   const [desc, setDesc] = useState(true);
@@ -165,7 +194,12 @@ export const SuspectsTab = memo(function SuspectsTab({ suspects, onKill, onOpen 
     }
   };
 
-  const entries = useMemo(() => buildEntries(suspects), [suspects]);
+  const cwdOf = useMemo(() => {
+    const m = new Map<number, string | null>();
+    for (const r of processes) if (r.cwd) m.set(r.pid, r.cwd);
+    return m;
+  }, [processes]);
+  const entries = useMemo(() => buildEntries(suspects, cwdOf), [suspects, cwdOf]);
 
   const sorted = useMemo(() => {
     const dir = desc ? -1 : 1;
@@ -322,7 +356,8 @@ const ListRow = memo(function ListRow({ it, onKill, onOpen, sub }: RowProps) {
       <div className="badges">
         <Badges kinds={it.kinds} />
       </div>
-      <div className="ellipsis" title={title}>
+      <div className="ellipsis" title={it.cwd ? `${it.cwd}\n${title}` : title}>
+        <CwdChip cwd={it.cwd} />
         {it.hint && <span className="hint">{it.hint} · </span>}
         {it.reasons.join("; ")}
       </div>
@@ -360,7 +395,8 @@ const ListGroup = memo(function ListGroup({ g, expanded, onToggle, onKill, onOpe
         <div className="badges">
           <Badges kinds={g.kinds} />
         </div>
-        <div className="ellipsis" title={[g.items[0].cmd, ...g.items[0].reasons].join("\n")}>
+        <div className="ellipsis" title={[g.cwd ?? "", g.items[0].cmd, ...g.items[0].reasons].filter(Boolean).join("\n")}>
+          <CwdChip cwd={g.cwd} />
           {groupTitle(g)} — вместе {fmtBytes(g.reclaim)}
         </div>
         <div className="num strong">{fmtBytes(g.reclaim)}</div>
@@ -396,8 +432,9 @@ const Card = memo(function Card({ it, onKill, onOpen }: RowProps) {
         <Badges kinds={it.kinds} />
         <ScoreBar score={it.score} />
       </div>
-      {(it.app_group !== it.name || it.hint) && (
-        <div className="dim small ellipsis" title={it.cmd}>
+      {(it.app_group !== it.name || it.hint || it.cwd) && (
+        <div className="dim small ellipsis" title={it.cwd ? `${it.cwd}\n${it.cmd}` : it.cmd}>
+          <CwdChip cwd={it.cwd} />
           {[it.app_group !== it.name ? it.app_group : "", it.hint].filter(Boolean).join(" · ")}
         </div>
       )}
@@ -432,6 +469,7 @@ const GroupCard = memo(function GroupCard({ g, expanded, onToggle, onKill, onOpe
         <ScoreBar score={g.score} />
       </div>
       <p className="reason" title={g.items[0].cmd}>
+        <CwdChip cwd={g.cwd} />
         {groupTitle(g)} — вместе <b>{fmtBytes(g.reclaim)}</b>
       </p>
       <p className="reason dim small">{g.items[0].reasons[0]}</p>

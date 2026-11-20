@@ -143,3 +143,12 @@ export function cmdHint(name: string, cmd: string | string[]): string {
 function shorten(s: string, max = 48): string {
   return s.length > max ? s.slice(0, max - 1) + "…" : s;
 }
+
+/** Last folder of a working directory ("~" for the home folder itself); "" when unknown. */
+export function cwdShort(cwd: string | null | undefined): string {
+  if (!cwd) return "";
+  const p = cwd.replace(/\/+$/, "");
+  if (!p) return "/";
+  if (/^\/Users\/[^/]+$/.test(p)) return "~";
+  return p.slice(p.lastIndexOf("/") + 1);
+}

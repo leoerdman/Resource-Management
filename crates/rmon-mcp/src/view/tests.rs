@@ -94,7 +94,12 @@ fn dashboard() -> Dashboard {
 
 fn guard_entry() -> JournalEntry {
     let raw = json!({"t": "2026-11-20T10:18:00Z", "ev": "zone", "zone": "red", "why": "давление жёлтое"});
-    JournalEntry { source: rmon_core::journal::Source::MemoryGuard, ts: Some(1_500), text: "зона red: давление жёлтое".into(), raw }
+    JournalEntry {
+        source: rmon_core::journal::Source::MemoryGuard,
+        ts: Some(1_500),
+        text: "зона red: давление жёлтое".into(),
+        raw,
+    }
 }
 
 #[test]
@@ -120,12 +125,26 @@ fn overview_formats_memory_trend_apps_and_guard() {
     let gz = out.guard.as_ref().unwrap();
     assert_eq!((gz.zone.as_deref(), gz.ts), (Some("red"), Some(1_500)));
 
-    assert!(text.starts_with(&format!("Память: занято {} из {} (75 %), давление повышенное", bytes(18 * GIB), bytes(24 * GIB))), "{text}");
+    assert!(
+        text.starts_with(&format!(
+            "Память: занято {} из {} (75 %), давление повышенное",
+            bytes(18 * GIB),
+            bytes(24 * GIB)
+        )),
+        "{text}"
+    );
     assert!(text.contains(&format!("своп {}", bytes_delta(2 * GIB as i64))), "{text}");
     assert!(text.contains("максимум критическое, выше нормы 5 мин"), "{text}");
     assert!(text.contains("Сторож памяти: зона red: давление жёлтое (2 мин назад)."), "{text}");
     assert!(text.contains(&format!("1. Google Chrome — {} (2 проц.)", bytes(3 * GIB))), "{text}");
-    assert!(text.contains(&format!("1. [80] node (10) — node большой; освободит {}; {}", bytes(2 * GIB), KillPolicy::Free.label())), "{text}");
+    assert!(
+        text.contains(&format!(
+            "1. [80] node (10) — node большой; освободит {}; {}",
+            bytes(2 * GIB),
+            KillPolicy::Free.label()
+        )),
+        "{text}"
+    );
 
     // Сразу после запуска: одна точка — анализа и тренда ещё нет; журнала сторожа нет.
     let mut fresh = dashboard();
@@ -133,7 +152,10 @@ fn overview_formats_memory_trend_apps_and_guard() {
     fresh.suspects.clear();
     let (out, text) = overview(&fresh, None, 1_620);
     assert!(!out.analysis_ready && out.guard.is_none());
-    assert!(text.contains("история ещё копится") && text.contains("анализ ещё не готов") && text.contains("журнала нет"), "{text}");
+    assert!(
+        text.contains("история ещё копится") && text.contains("анализ ещё не готов") && text.contains("журнала нет"),
+        "{text}"
+    );
     let schema = serde_json::to_value(schemars::schema_for!(OverviewOut)).unwrap();
     assert_eq!(schema["type"], "object");
 }
@@ -142,7 +164,12 @@ fn overview_formats_memory_trend_apps_and_guard() {
 fn list_sorts_filters_and_groups() {
     let d = dashboard();
     let names = |out: &ListOut| out.processes.iter().map(|p| p.pid).collect::<Vec<_>>();
-    let a = |sort, limit, filter: Option<&str>, group| ListArgs { sort, limit, filter: filter.map(Into::into), group_by_app: group };
+    let a = |sort, limit, filter: Option<&str>, group| ListArgs {
+        sort,
+        limit,
+        filter: filter.map(Into::into),
+        group_by_app: group,
+    };
 
     let (out, text) = list(&d, &a(SortKey::Mem, 25, None, false));
     assert_eq!(out.matched, 4);
@@ -185,7 +212,8 @@ fn cleanup_sums_by_policy() {
     let (out, text) = cleanup(&d, 30);
     assert_eq!(out.suspects.len(), 3, "score 20 ниже порога");
     assert_eq!((out.free_total, out.confirm_total, out.protected_total), (2 * GIB, 2 * GIB, GIB));
-    let head = format!("Можно освободить ≈ {} без подтверждения, ещё {} — с подтверждением.", bytes(2 * GIB), bytes(2 * GIB));
+    let head =
+        format!("Можно освободить ≈ {} без подтверждения, ещё {} — с подтверждением.", bytes(2 * GIB), bytes(2 * GIB));
     assert!(text.starts_with(&head), "{text}");
     assert!(text.contains("Защищённые"), "{text}");
     let (out, _) = cleanup(&d, 0);
@@ -197,7 +225,13 @@ fn cleanup_sums_by_policy() {
 #[test]
 fn details_show_chain_children_and_series() {
     let d = dashboard();
-    let brief = |pid: i32, name: &str, reclaim: u64| ProcBrief { pid, name: name.into(), started_at: 1, reclaim, cmd: name.into() };
+    let brief = |pid: i32, name: &str, reclaim: u64| ProcBrief {
+        pid,
+        name: name.into(),
+        started_at: 1,
+        reclaim,
+        cmd: name.into(),
+    };
     let det = ProcessDetails {
         row: d.processes[0].clone(),
         command_line: "node --serve".into(),
@@ -247,7 +281,9 @@ fn kill_outcomes_map_to_statuses() {
     let stuck = kill_ok(&KillOutcome { exited: false, ..ok }, &KillPolicy::Free);
     assert!(stuck.is_error() && stuck.status == "not_exited");
 
-    let e = Error::ConfirmationRequired { pid: 7, name: "sleep".into(), reason: "системная утилита".into() };
+    let e = Error::ConfirmationRequired {
+        pid: 7, name: "sleep".into(), reason: "системная утилита".into()
+    };
     let out = kill_err(7, Some("sleep"), Some(&confirm), &e);
     assert_eq!(out.status, "needs_confirmation");
     assert!(out.is_error() && out.message.contains("согласие владельца"), "{}", out.message);
@@ -259,7 +295,11 @@ fn kill_outcomes_map_to_statuses() {
     let out = kill_missing(1, None, Some(&launchd), true);
     assert_eq!(out.status, "refused_protected");
     assert!(out.message.contains("ядро системы"), "{}", out.message);
-    assert_eq!(kill_missing(500, None, None, true).status, "refused_protected", "нечитаемый живой — чужой или системный");
+    assert_eq!(
+        kill_missing(500, None, None, true).status,
+        "refused_protected",
+        "нечитаемый живой — чужой или системный"
+    );
     assert_eq!(kill_missing(500, Some("sleep"), Some(&confirm), true).status, "not_in_snapshot");
     assert_eq!(kill_missing(500, None, None, false).status, "not_found");
 }

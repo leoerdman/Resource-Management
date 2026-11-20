@@ -27,11 +27,7 @@ pub fn bytes(n: u64) -> String {
 
 /// Скорость роста: «40 МБ/мин», убыль — со знаком: «-1,5 МБ/мин».
 pub fn bytes_per_min(per_min: f64) -> String {
-    let unit = if per_min.abs() >= MIB as f64 {
-        (MIB as f64, "МБ/мин")
-    } else {
-        (KIB as f64, "КБ/мин")
-    };
+    let unit = if per_min.abs() >= MIB as f64 { (MIB as f64, "МБ/мин") } else { (KIB as f64, "КБ/мин") };
     let value = decimal1(per_min.abs() / unit.0);
     let sign = if per_min < 0.0 && value != "0" { "-" } else { "" };
     format!("{sign}{value} {}", unit.1)
@@ -52,11 +48,7 @@ pub fn duration_human(seconds: u64) -> String {
     if seconds >= 3600 {
         let hours = seconds / 3600;
         let minutes = (seconds % 3600) / 60;
-        if minutes == 0 {
-            format!("{hours} ч")
-        } else {
-            format!("{hours} ч {minutes} мин")
-        }
+        if minutes == 0 { format!("{hours} ч") } else { format!("{hours} ч {minutes} мин") }
     } else if seconds >= 60 {
         format!("{} мин", seconds / 60)
     } else {
@@ -74,11 +66,7 @@ fn decimal1(value: f64) -> String {
     let tenths = (value * 10.0).round().max(0.0) as u64;
     let whole = tenths / 10;
     let frac = tenths % 10;
-    if frac == 0 {
-        whole.to_string()
-    } else {
-        format!("{whole},{frac}")
-    }
+    if frac == 0 { whole.to_string() } else { format!("{whole},{frac}") }
 }
 
 #[cfg(test)]

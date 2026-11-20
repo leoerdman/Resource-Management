@@ -58,7 +58,8 @@ impl Server {
         }
         self.send(&msg);
         loop {
-            let line = self.lines.recv_timeout(Duration::from_secs(20)).unwrap_or_else(|_| panic!("нет ответа на {method}"));
+            let line =
+                self.lines.recv_timeout(Duration::from_secs(20)).unwrap_or_else(|_| panic!("нет ответа на {method}"));
             let v: Value = serde_json::from_str(&line).unwrap_or_else(|e| panic!("stdout не JSON ({e}): {line}"));
             if v["id"] == json!(id) {
                 assert_eq!(v["jsonrpc"], "2.0");
@@ -98,7 +99,9 @@ fn serves_protocol_and_survives_errors() {
 
     let init = s.call(
         "initialize",
-        Some(json!({"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "it", "version": "0"}})),
+        Some(
+            json!({"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "it", "version": "0"}}),
+        ),
     );
     assert_eq!(init["result"]["serverInfo"]["name"], "rmon", "{init}");
     assert!(init["result"]["capabilities"]["tools"].is_object(), "{init}");
@@ -109,7 +112,10 @@ fn serves_protocol_and_survives_errors() {
     let tools = list["result"]["tools"].as_array().expect("tools");
     let mut names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     names.sort_unstable();
-    assert_eq!(names, ["guard_events", "kill_process", "list_processes", "memory_overview", "process_details", "suggest_cleanup"]);
+    assert_eq!(
+        names,
+        ["guard_events", "kill_process", "list_processes", "memory_overview", "process_details", "suggest_cleanup"]
+    );
     for t in tools {
         assert_eq!(t["inputSchema"]["type"], "object", "{t}");
         assert_eq!(t["outputSchema"]["type"], "object", "{t}");

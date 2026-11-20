@@ -57,10 +57,7 @@ pub fn status() -> Legacy {
         return Legacy::Absent;
     }
     if let Some((true, out)) = launchctl(&["print", &format!("{}/{LABEL}", domain())]) {
-        let pid = out
-            .lines()
-            .find_map(|l| l.trim().strip_prefix("pid = "))
-            .and_then(|v| v.trim().parse().ok());
+        let pid = out.lines().find_map(|l| l.trim().strip_prefix("pid = ")).and_then(|v| v.trim().parse().ok());
         return Legacy::Running { pid };
     }
     if plist().exists() {

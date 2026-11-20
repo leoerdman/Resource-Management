@@ -26,7 +26,6 @@ use crate::view::{CleanupOut, DetailsOut, GuardOut, KillOut, ListOut, OverviewOu
 /// Сколько ждать первого снимка после запуска сервера.
 const FIRST_SNAPSHOT_WAIT: Duration = Duration::from_secs(5);
 
-
 /// Ответ инструмента: текст человеку + структура по схеме.
 fn reply<T: Serialize>(text: String, data: &T, is_error: bool) -> Result<CallToolResult, ErrorData> {
     let value = serde_json::to_value(data).map_err(|e| ErrorData::internal_error(format!("serialize: {e}"), None))?;
@@ -57,7 +56,10 @@ impl RmonServer {
                 return Ok(d);
             }
             if waited >= FIRST_SNAPSHOT_WAIT {
-                return Err(ErrorData::internal_error("первый снимок памяти ещё не готов — повторите через несколько секунд", None));
+                return Err(ErrorData::internal_error(
+                    "первый снимок памяти ещё не готов — повторите через несколько секунд",
+                    None,
+                ));
             }
             tokio::time::sleep(step).await;
             waited += step;

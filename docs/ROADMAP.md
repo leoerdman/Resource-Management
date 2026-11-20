@@ -9,7 +9,8 @@
 - [x] MCP-сервер для Claude Code (`rmon mcp`)
 - [x] Сторож памяти перенесён из `Hooks/memory-guard` в rmon (`rmon_core::guard`)
 - [x] Запуск при входе в macOS (LaunchAgent приложения), настройки из окна с записью в config.toml
-- [ ] Вкладки «Сторож» и «Настройки» в окне
+- [x] Вкладки «Сторож» и «Настройки» в окне, «Снять все» одной командой (параллельно)
+- [x] CI на macOS: формат, clippy, тесты, сверка TS-типов, фронтенд
 - [ ] Перенос обязанности со старого LaunchAgent `com.leoerdman.memory-guard` (кнопка в окне)
 
 ## Позже — Linux и Windows

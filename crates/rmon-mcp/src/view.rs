@@ -29,7 +29,8 @@ const SERIES_POINTS: usize = 30;
 /// Потомков в `process_details`.
 const TOP_CHILDREN: usize = 15;
 /// Рост ещё не посчитан ни для одной строки.
-const GROWTH_PENDING: &str = "Рост пока неизвестен: он считается по трём и более снимкам (≈15 с после запуска сервера).\n";
+const GROWTH_PENDING: &str =
+    "Рост пока неизвестен: он считается по трём и более снимкам (≈15 с после запуска сервера).\n";
 
 /// Имя варианта, как его сериализует serde (`normal`, `sleeping`, `hog`…).
 fn tag<T: Serialize>(v: &T) -> String {
@@ -249,7 +250,11 @@ pub fn trend(h: &[HistoryPoint]) -> TrendOut {
         swap_delta: delta(first.swap_used, last.swap_used),
         swap_per_min: slope_per_min(&swap),
         pressure_max: tag(&max),
-        elevated_secs: h.windows(2).filter(|w| w[0].pressure != Pressure::Normal).map(|w| w[1].t.saturating_sub(w[0].t)).sum(),
+        elevated_secs: h
+            .windows(2)
+            .filter(|w| w[0].pressure != Pressure::Normal)
+            .map(|w| w[1].t.saturating_sub(w[0].t))
+            .sum(),
     }
 }
 
@@ -285,7 +290,12 @@ pub fn overview(d: &Dashboard, guard: Option<&JournalEntry>, now: u64) -> (Overv
             available_pct: m.available_pct,
         },
         trend: tr.clone(),
-        top_apps: d.groups.iter().take(TOP_APPS).map(|g| AppOut { name: g.name.clone(), mem: g.footprint, count: g.count }).collect(),
+        top_apps: d
+            .groups
+            .iter()
+            .take(TOP_APPS)
+            .map(|g| AppOut { name: g.name.clone(), mem: g.footprint, count: g.count })
+            .collect(),
         suspects: d.suspects.iter().take(TOP_SUSPECTS).map(SuspectOut::from).collect(),
         analysis_ready,
         guard: guard.map(guard_zone),
@@ -471,7 +481,8 @@ fn growth_text(g: Option<f64>) -> String {
 /// `list_processes`.
 pub fn list(d: &Dashboard, a: &ListArgs) -> (ListOut, String) {
     let filter = a.filter.as_deref().map(str::trim).filter(|f| !f.is_empty()).map(str::to_lowercase);
-    let mut rows: Vec<&ProcessRow> = d.processes.iter().filter(|r| filter.as_deref().is_none_or(|f| matches(r, f))).collect();
+    let mut rows: Vec<&ProcessRow> =
+        d.processes.iter().filter(|r| filter.as_deref().is_none_or(|f| matches(r, f))).collect();
     let limit = a.limit as usize;
     let mut t = String::new();
     let head = match &filter {
@@ -667,7 +678,10 @@ pub fn details(det: &ProcessDetails, full: Option<&ProcessInfo>, suspect: Option
             min: det.series.iter().map(|p| p.1).min().unwrap_or(0),
             max: det.series.iter().map(|p| p.1).max().unwrap_or(0),
             slope_per_min: slope_per_min(&det.series),
-            points: downsample(&det.series, SERIES_POINTS).into_iter().map(|(t, bytes)| PointOut { t, bytes }).collect(),
+            points: downsample(&det.series, SERIES_POINTS)
+                .into_iter()
+                .map(|(t, bytes)| PointOut { t, bytes })
+                .collect(),
         }
     });
     let args = full.map(|p| rmon_core::monitor::limit_args(&p.args, 2000)).unwrap_or_else(|| r.args.clone());
@@ -716,12 +730,7 @@ pub fn details(det: &ProcessDetails, full: Option<&ProcessInfo>, suspect: Option
     }
     match &series {
         Some(s) => {
-            t.push_str(&format!(
-                "Память за {}: от {} до {}",
-                duration_human(s.span_secs),
-                bytes(s.min),
-                bytes(s.max)
-            ));
+            t.push_str(&format!("Память за {}: от {} до {}", duration_human(s.span_secs), bytes(s.min), bytes(s.max)));
             if let Some(slope) = s.slope_per_min {
                 t.push_str(&format!(", наклон {}", bytes_per_min(slope)));
             }
@@ -780,7 +789,9 @@ pub fn cleanup(d: &Dashboard, min_score: u32) -> (CleanupOut, String) {
         if protected_total > 0 {
             t.push_str(&format!("Защищённые ({}) не снимаются никогда.\n", bytes(protected_total)));
         }
-        t.push_str("Снять: kill_process {pid, reason}; «с подтверждением» — только после согласия владельца (confirm=true).\n");
+        t.push_str(
+            "Снять: kill_process {pid, reason}; «с подтверждением» — только после согласия владельца (confirm=true).\n",
+        );
     }
     let out = CleanupOut {
         min_score,
@@ -886,7 +897,10 @@ pub fn kill_err(pid: i32, name: Option<&str>, policy: Option<&KillPolicy>, e: &E
 pub fn kill_missing(pid: i32, name: Option<&str>, policy: Option<&KillPolicy>, alive: bool) -> KillOut {
     let (status, message) = match (policy, alive) {
         (Some(KillPolicy::Protected(reason)), _) => {
-            let e = Error::Protected { pid, name: name.unwrap_or("системный процесс").to_owned(), reason: reason.clone() };
+            let e =
+                Error::Protected {
+                    pid, name: name.unwrap_or("системный процесс").to_owned(), reason: reason.clone()
+                };
             ("refused_protected", format!("{e}. Этот процесс не снимается никогда."))
         }
         (None, true) => (
@@ -895,7 +909,9 @@ pub fn kill_missing(pid: i32, name: Option<&str>, policy: Option<&KillPolicy>, a
         ),
         (Some(_), true) => (
             "not_in_snapshot",
-            format!("процесс {pid} запущен позже последнего снимка (снимок раз в 5 с) — повторите через несколько секунд"),
+            format!(
+                "процесс {pid} запущен позже последнего снимка (снимок раз в 5 с) — повторите через несколько секунд"
+            ),
         ),
         (_, false) => ("not_found", format!("процесса {pid} нет")),
     };
@@ -915,7 +931,9 @@ pub fn kill_missing(pid: i32, name: Option<&str>, policy: Option<&KillPolicy>, a
 /// `process_details` для процесса не из последнего снимка.
 pub fn details_missing(pid: i32, alive: bool) -> String {
     if alive {
-        format!("процесса {pid} нет в последнем снимке: он запущен только что (снимок раз в 5 с) или не читается без прав root")
+        format!(
+            "процесса {pid} нет в последнем снимке: он запущен только что (снимок раз в 5 с) или не читается без прав root"
+        )
     } else {
         format!("процесса {pid} нет")
     }

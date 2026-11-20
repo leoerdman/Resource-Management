@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { cmdHint, GENERIC_NAMES, fmtAge, fmtBytes, fmtGrowth, fmtPct, plural, STATE_LABEL } from "../format";
+import { cmdHint, cwdShort, GENERIC_NAMES, fmtAge, fmtBytes, fmtGrowth, fmtPct, plural, STATE_LABEL } from "../format";
 import type { KillTarget, ProcessRow, ProcKey } from "../types";
 import type { KillRequest } from "./KillDialog";
 import { KillButton, PolicyTag } from "./Kill";
@@ -93,7 +93,8 @@ export const ProcessesTab = memo(function ProcessesTab({ processes, now, onKill,
         String(r.pid) === q ||
         r.name.toLowerCase().includes(q) ||
         r.app_group.toLowerCase().includes(q) ||
-        r.args.some((a) => a.toLowerCase().includes(q)),
+        r.args.some((a) => a.toLowerCase().includes(q)) ||
+        (r.cwd != null && r.cwd.toLowerCase().includes(q)),
     );
   }, [processes, q]);
 
@@ -136,7 +137,7 @@ export const ProcessesTab = memo(function ProcessesTab({ processes, now, onKill,
           ref={filterRef}
           className="filter"
           type="search"
-          placeholder="Фильтр: имя, приложение, аргументы, pid  (⌘F)"
+          placeholder="Фильтр: имя, приложение, каталог, аргументы, pid  (⌘F)"
           value={filter}
           onKeyDown={(e) => {
             if (e.key === "Escape") {
@@ -187,11 +188,13 @@ const Row = memo(function Row({ r, now, onKill, onOpen }: { r: ProcessRow; now: 
   const g = r.growth_per_min;
   const cmd = r.args.length ? r.args.join(" ") : r.exe ?? r.name;
   const hint = GENERIC_NAMES.has(r.name) ? cmdHint(r.name, r.args) : "";
+  const dir = r.cwd ? cwdShort(r.cwd).replace(/^~$/, "") : "";
   return (
     <div className={`prow st-${r.state}`} role="row" onClick={() => onOpen(r)}>
       <div className="num dim">{r.pid}</div>
-      <div className="name" title={cmd}>
+      <div className="name" title={r.cwd ? `${r.cwd}\n${cmd}` : cmd}>
         {r.name}
+        {dir && <span className="cwd-chip">{dir}</span>}
         {hint ? <span className="dim"> {hint}</span> : r.app_group !== r.name && <span className="dim"> · {r.app_group}</span>}
       </div>
       <div className="num strong" title={r.footprint == null ? "footprint недоступен (нет прав), показан RSS" : undefined}>

@@ -13,8 +13,8 @@ pub mod config;
 pub mod contract;
 pub mod error;
 pub mod fmt;
-pub mod guard;
 pub mod group;
+pub mod guard;
 pub mod history;
 pub mod journal;
 pub mod kill;
@@ -25,6 +25,4 @@ pub mod policy;
 pub mod settings;
 
 pub use error::{Error, Result};
-pub use model::{
-    AppGroup, Pressure, ProcState, ProcessInfo, Snapshot, SystemMemory, VmCounters,
-};
+pub use model::{AppGroup, Pressure, ProcState, ProcessInfo, Snapshot, SystemMemory, VmCounters};

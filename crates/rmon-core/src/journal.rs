@@ -78,7 +78,12 @@ pub fn read_recent(limit: usize) -> Vec<JournalEntry> {
 pub fn guard_recent(limit: usize) -> Vec<JournalEntry> {
     crate::guard::runner::read_events(limit)
         .into_iter()
-        .map(|ev| JournalEntry { source: Source::Guard, ts: Some(ev.ts), text: ev.text(), raw: serde_json::to_value(&ev).unwrap_or_default() })
+        .map(|ev| JournalEntry {
+            source: Source::Guard,
+            ts: Some(ev.ts),
+            text: ev.text(),
+            raw: serde_json::to_value(&ev).unwrap_or_default(),
+        })
         .collect()
 }
 

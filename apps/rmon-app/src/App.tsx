@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { backend } from "./api";
+import { backend, type OpenTab } from "./api";
 import { errText } from "./format";
 import type { Dashboard, ProcKey } from "./types";
 import { Header } from "./components/Header";
@@ -10,15 +10,21 @@ import { JournalTab } from "./components/JournalTab";
 import { KillDialog, type KillRequest, type KillResult } from "./components/KillDialog";
 import { DetailsDrawer } from "./components/DetailsDrawer";
 import { Toasts, type Toast } from "./components/Toasts";
+import { GuardTab } from "./components/GuardTab";
+import { SettingsTab } from "./components/SettingsTab";
 
-type Tab = "suspects" | "apps" | "procs" | "journal";
+type Tab = "suspects" | "apps" | "procs" | "journal" | "guard" | "settings";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "suspects", label: "Подозреваемые" },
   { id: "apps", label: "Приложения" },
   { id: "procs", label: "Процессы" },
   { id: "journal", label: "Журнал" },
+  { id: "guard", label: "Сторож" },
+  { id: "settings", label: "Настройки" },
 ];
+
+const OPEN_TAB: Record<OpenTab, Tab> = { settings: "settings", guard: "guard", suspects: "suspects" };
 
 function isTyping(t: EventTarget | null): boolean {
   return t instanceof HTMLElement && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName));
@@ -66,7 +72,24 @@ export default function App() {
     };
   }, []);
 
-  // Keyboard: ⌘F → filter in «Процессы», 1–4 → tabs.
+  // The menu-bar icon asks for a tab («Настройки…», «Сторож…»).
+  useEffect(() => {
+    let alive = true;
+    let off: (() => void) | null = null;
+    backend()
+      .then((b) => b.onOpenTab((t) => OPEN_TAB[t] && setTab(OPEN_TAB[t])))
+      .then((unsub) => {
+        if (alive) off = unsub;
+        else unsub();
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+      off?.();
+    };
+  }, []);
+
+  // Keyboard: ⌘F → filter in «Процессы», ⌘, → «Настройки», 1–6 → tabs.
   const modalOpen = killReq != null;
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -77,8 +100,13 @@ export default function App() {
         setFilterFocus((n) => n + 1);
         return;
       }
+      if (e.metaKey && !e.altKey && e.key === ",") {
+        e.preventDefault();
+        setTab("settings");
+        return;
+      }
       if (e.metaKey || e.ctrlKey || e.altKey || isTyping(e.target)) return;
-      const i = ["1", "2", "3", "4"].indexOf(e.key);
+      const i = ["1", "2", "3", "4", "5", "6"].indexOf(e.key);
       if (i >= 0) setTab(TABS[i].id);
     };
     window.addEventListener("keydown", onKey);
@@ -130,7 +158,7 @@ export default function App() {
             aria-selected={tab === t.id}
             className={tab === t.id ? "tab active" : "tab"}
             onClick={() => setTab(t.id)}
-            title={`Клавиша ${i + 1}`}
+            title={t.id === "settings" ? `Клавиша ${i + 1} или ⌘,` : `Клавиша ${i + 1}`}
           >
             {t.label}
             {t.id === "suspects" && dash.suspects.length > 0 && <span className="count">{dash.suspects.length}</span>}
@@ -138,7 +166,7 @@ export default function App() {
         ))}
       </nav>
       <main className="content">
-        {tab === "suspects" && <SuspectsTab suspects={dash.suspects} onKill={onKill} onOpen={onOpen} />}
+        {tab === "suspects" && <SuspectsTab suspects={dash.suspects} processes={dash.processes} onKill={onKill} onOpen={onOpen} />}
         {tab === "apps" && (
           <AppsTab
             groups={dash.groups}
@@ -153,6 +181,8 @@ export default function App() {
           <ProcessesTab processes={dash.processes} now={dash.taken_at} onKill={onKill} onOpen={onOpen} focusSignal={filterFocus} />
         )}
         {tab === "journal" && <JournalTab />}
+        {tab === "guard" && <GuardTab onToast={pushToast} />}
+        {tab === "settings" && <SettingsTab onToast={pushToast} />}
       </main>
       {details && (
         <DetailsDrawer

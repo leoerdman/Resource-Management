@@ -111,9 +111,11 @@ impl MacOsPlatform {
 impl Platform for MacOsPlatform {
     fn system_memory(&self) -> Result<SystemMemory> {
         let mut vm = MaybeUninit::<libc::vm_statistics64>::zeroed();
-        let mut count = (size_of::<libc::vm_statistics64>() / size_of::<libc::integer_t>()) as libc::mach_msg_type_number_t;
+        let mut count =
+            (size_of::<libc::vm_statistics64>() / size_of::<libc::integer_t>()) as libc::mach_msg_type_number_t;
         // SAFETY: буфер размера vm_statistics64, count — его длина в integer_t; ядро пишет не больше count.
-        let kr = unsafe { libc::host_statistics64(self.host, libc::HOST_VM_INFO64, vm.as_mut_ptr().cast(), &mut count) };
+        let kr =
+            unsafe { libc::host_statistics64(self.host, libc::HOST_VM_INFO64, vm.as_mut_ptr().cast(), &mut count) };
         if kr != libc::KERN_SUCCESS {
             return Err(Error::Invalid { what: "host_statistics64", detail: format!("kern_return {kr}") });
         }
@@ -157,9 +159,11 @@ impl Platform for MacOsPlatform {
 
     fn processes(&mut self) -> Result<Vec<ProcessSample>> {
         let pids = list_pids()?;
-        let out: Vec<ProcessSample> = pids.into_iter().filter(|&p| p > 0).filter_map(|p| self.read_process(p)).collect();
+        let out: Vec<ProcessSample> =
+            pids.into_iter().filter(|&p| p > 0).filter_map(|p| self.read_process(p)).collect();
         // Кэш — только живые процессы.
-        let alive: std::collections::HashSet<(i32, u64)> = out.iter().map(|s| (s.info.pid, s.info.started_at)).collect();
+        let alive: std::collections::HashSet<(i32, u64)> =
+            out.iter().map(|s| (s.info.pid, s.info.started_at)).collect();
         self.cache.retain(|k, _| alive.contains(k));
         Ok(out)
     }
@@ -334,7 +338,17 @@ fn procargs(pid: i32) -> Option<(Vec<String>, Vec<String>)> {
     let mut amsize = size_of::<libc::c_int>();
     let mut am_mib = [libc::CTL_KERN, libc::KERN_ARGMAX];
     // SAFETY: читаем int в живую переменную.
-    if unsafe { libc::sysctl(am_mib.as_mut_ptr(), 2, (&mut argmax as *mut libc::c_int).cast(), &mut amsize, std::ptr::null_mut(), 0) } != 0 {
+    if unsafe {
+        libc::sysctl(
+            am_mib.as_mut_ptr(),
+            2,
+            (&mut argmax as *mut libc::c_int).cast(),
+            &mut amsize,
+            std::ptr::null_mut(),
+            0,
+        )
+    } != 0
+    {
         return None;
     }
     let mut size = argmax.max(0) as usize;
@@ -343,7 +357,9 @@ fn procargs(pid: i32) -> Option<(Vec<String>, Vec<String>)> {
     }
     let mut buf = vec![0u8; size];
     // SAFETY: буфер size байт; ядро пишет не больше и обновляет size.
-    if unsafe { libc::sysctl(mib.as_mut_ptr(), 3, buf.as_mut_ptr().cast(), &mut size, std::ptr::null_mut(), 0) } != 0 || size < 4 {
+    if unsafe { libc::sysctl(mib.as_mut_ptr(), 3, buf.as_mut_ptr().cast(), &mut size, std::ptr::null_mut(), 0) } != 0
+        || size < 4
+    {
         return None;
     }
     buf.truncate(size);

@@ -11,8 +11,8 @@ use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 use rmon_core::analyze::{Suspect, app_groups};
 use rmon_core::config::{self, Config};
-use rmon_core::guard::{self, GuardMode};
 use rmon_core::fmt::{bytes, bytes_per_min, duration_human, percent};
+use rmon_core::guard::{self, GuardMode};
 use rmon_core::kill::{KillRequest, Requester};
 use rmon_core::monitor::{Monitor, MonitorConfig, ProcessRow, Tick};
 use rmon_core::policy::{KillPolicy, Policy};
@@ -186,7 +186,12 @@ fn status(json: bool, paint: Paint) -> Result<()> {
             groups: &'a [rmon_core::AppGroup],
             suspects: &'a [Suspect],
         }
-        return print_json(&Status { taken_at: d.taken_at, system: &d.system, groups: top_apps, suspects: top_suspects });
+        return print_json(&Status {
+            taken_at: d.taken_at,
+            system: &d.system,
+            groups: top_apps,
+            suspects: top_suspects,
+        });
     }
     let m = &d.system;
     println!(
@@ -228,14 +233,7 @@ fn print_suspects(list: &[Suspect], paint: Paint) {
         return;
     }
     for s in list {
-        println!(
-            "  {:>3}  {:>7}  {:>9}  {}  {}",
-            s.score,
-            s.pid,
-            bytes(s.reclaim),
-            s.reason,
-            paint.policy(&s.policy)
-        );
+        println!("  {:>3}  {:>7}  {:>9}  {}  {}", s.score, s.pid, bytes(s.reclaim), s.reason, paint.policy(&s.policy));
     }
 }
 
@@ -327,7 +325,11 @@ fn suggest(json: bool, window: Duration, interval: Duration, paint: Paint) -> Re
     }
     let free: u64 = suspects.iter().filter(|s| s.policy == KillPolicy::Free).map(|s| s.reclaim).sum();
     let confirm: u64 = suspects.iter().filter(|s| matches!(s.policy, KillPolicy::Confirm(_))).map(|s| s.reclaim).sum();
-    println!("Можно освободить ≈ {} без подтверждения, ещё {} — с подтверждением.", paint.bold(&bytes(free)), bytes(confirm));
+    println!(
+        "Можно освободить ≈ {} без подтверждения, ещё {} — с подтверждением.",
+        paint.bold(&bytes(free)),
+        bytes(confirm)
+    );
     print_suspects(&suspects, paint);
     Ok(())
 }
@@ -413,7 +415,11 @@ fn show_config(json: bool) -> Result<()> {
             rule_errors: &errors,
         });
     }
-    println!("файл настроек  {}{}", path.display(), if path.exists() { "" } else { " (нет — действуют значения по умолчанию)" });
+    println!(
+        "файл настроек  {}{}",
+        path.display(),
+        if path.exists() { "" } else { " (нет — действуют значения по умолчанию)" }
+    );
     println!("журнал         {}", config::actions_log().display());
     println!("сторож         {}", guard::runner::events_log().display());
     println!("\n{}", toml::to_string_pretty(&cfg)?);
@@ -458,13 +464,28 @@ fn guard_cmd(json: bool, action: GuardCmd, paint: Paint) -> Result<()> {
         }));
     }
     let g = &cfg.guard;
-    let mode = if !g.enabled { "выключен" } else if g.dry_run { "проба (только «убил бы»)" } else { "боевой" };
+    let mode = if !g.enabled {
+        "выключен"
+    } else if g.dry_run {
+        "проба (только «убил бы»)"
+    } else {
+        "боевой"
+    };
     println!("Сторож памяти: {}", paint.bold(mode));
     println!(
         "  красная зона: давление ≥ {}, или доступно ≤ {} %, или давление ≥ {} и своп ≥ {}; держится {} с",
-        g.red.pressure_level, g.red.min_available_pct, g.red.swap_red_from_level, bytes(g.red.swap_red_mb * 1024 * 1024), g.sustain_secs
+        g.red.pressure_level,
+        g.red.min_available_pct,
+        g.red.swap_red_from_level,
+        bytes(g.red.swap_red_mb * 1024 * 1024),
+        g.sustain_secs
     );
-    println!("  жертва ≥ {}, пауза после снятия {} с, уведомления: {}", bytes(g.min_victim_mb * 1024 * 1024), g.after_kill_secs, if g.notify { "да" } else { "нет" });
+    println!(
+        "  жертва ≥ {}, пауза после снятия {} с, уведомления: {}",
+        bytes(g.min_victim_mb * 1024 * 1024),
+        g.after_kill_secs,
+        if g.notify { "да" } else { "нет" }
+    );
     println!("  старый memory-guard: {legacy:?}");
     if !holder.trim().is_empty() {
         println!("  держит сторожа: pid {}", holder.trim());
@@ -485,7 +506,9 @@ fn guard_now(json: bool, paint: Paint) -> Result<()> {
     let exclude = guard::self_and_ancestors(&t.snapshot, std::process::id() as i32);
     let (candidates, rejected) = guard::rank_victims(&t.snapshot, &rules, &exclude);
     if json {
-        return print_json(&serde_json::json!({ "zone": zone, "why": why, "candidates": candidates, "rejected": rejected }));
+        return print_json(
+            &serde_json::json!({ "zone": zone, "why": why, "candidates": candidates, "rejected": rejected }),
+        );
     }
     println!("Зона: {} ({why})", paint.bold(&format!("{zone:?}")));
     println!("\nКандидаты (порог {}):", bytes(cfg.guard.min_victim_mb * 1024 * 1024));
@@ -509,15 +532,19 @@ fn guard_now(json: bool, paint: Paint) -> Result<()> {
 
 fn guard_run(json: bool) -> Result<()> {
     let cfg = MonitorConfig { tick: Duration::from_secs(3), analyze_every: 20, ..MonitorConfig::default() };
-    let handle = rmon_core::monitor::spawn_guarded(cfg, |_| {}, move |ev| {
-        if json {
-            if let Ok(line) = serde_json::to_string(ev) {
-                println!("{line}");
+    let handle = rmon_core::monitor::spawn_guarded(
+        cfg,
+        |_| {},
+        move |ev| {
+            if json {
+                if let Ok(line) = serde_json::to_string(ev) {
+                    println!("{line}");
+                }
+            } else {
+                println!("{}", ev.text());
             }
-        } else {
-            println!("{}", ev.text());
-        }
-    })?;
+        },
+    )?;
     eprintln!("сторож без окна запущен; Ctrl-C — выход");
     loop {
         std::thread::sleep(Duration::from_secs(60));

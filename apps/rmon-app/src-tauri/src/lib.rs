@@ -68,7 +68,11 @@ struct AppState {
 
 impl AppState {
     fn monitor(&self) -> Result<MonitorHandle, String> {
-        self.monitor.lock().unwrap_or_else(|e| e.into_inner()).clone().ok_or_else(|| "монитор ещё не запущен".to_string())
+        self.monitor
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+            .ok_or_else(|| "монитор ещё не запущен".to_string())
     }
 }
 
@@ -132,7 +136,12 @@ fn update_tray(app: &AppHandle, state: &AppState, d: Option<&Dashboard>) {
         let used = fmt::bytes(d.system.used);
         next.pressure = Some(d.system.pressure);
         next.title = cfg.app.tray_title.then(|| used.clone());
-        next.tooltip = format!("Давление {} · занято {} · своп {}", d.system.pressure.as_str(), used, fmt::bytes(d.system.swap_used));
+        next.tooltip = format!(
+            "Давление {} · занято {} · своп {}",
+            d.system.pressure.as_str(),
+            used,
+            fmt::bytes(d.system.swap_used)
+        );
         next.lines = d.suspects.iter().take(TRAY_SUSPECTS).map(tray_line).collect();
     }
     if let Ok(m) = state.monitor()
@@ -162,7 +171,10 @@ fn update_tray(app: &AppHandle, state: &AppState, d: Option<&Dashboard>) {
     if cur.tooltip != next.tooltip {
         let _ = tray.set_tooltip(Some(next.tooltip.as_str()));
     }
-    let menu_changed = cur.lines != next.lines || cur.guard_on != next.guard_on || cur.guard_dry != next.guard_dry || cur.guard_note != next.guard_note;
+    let menu_changed = cur.lines != next.lines
+        || cur.guard_on != next.guard_on
+        || cur.guard_dry != next.guard_dry
+        || cur.guard_note != next.guard_note;
     if menu_changed && let Ok(menu) = build_menu(app, &next) {
         let _ = tray.set_menu(Some(menu));
     }
@@ -174,7 +186,14 @@ fn build_menu(app: &AppHandle, v: &TrayView) -> tauri::Result<Menu<tauri::Wry>> 
     menu.append(&MenuItem::with_id(app, "open", "Открыть Resource Monitor", true, None::<&str>)?)?;
     menu.append(&PredefinedMenuItem::separator(app)?)?;
     menu.append(&CheckMenuItem::with_id(app, "guard", "Сторож памяти", true, v.guard_on, None::<&str>)?)?;
-    menu.append(&CheckMenuItem::with_id(app, "guard_dry", "Режим пробы (только «убил бы»)", v.guard_on, v.guard_dry, None::<&str>)?)?;
+    menu.append(&CheckMenuItem::with_id(
+        app,
+        "guard_dry",
+        "Режим пробы (только «убил бы»)",
+        v.guard_on,
+        v.guard_dry,
+        None::<&str>,
+    )?)?;
     if let Some(note) = &v.guard_note {
         let note: String = note.chars().take(TRAY_LINE).collect();
         menu.append(&MenuItem::with_id(app, "guard_note", format!("⚠︎ {note}"), true, None::<&str>)?)?;
@@ -217,7 +236,8 @@ fn toggle_guard(app: &AppHandle, enabled: Option<bool>, dry_run: Option<bool>) {
     if let Some(g) = m.guard()
         && let Err(e) = g.set(enabled, dry_run, None)
     {
-        let _ = app.notification().builder().title("Resource Monitor").body(format!("Сторож не переключён: {e}")).show();
+        let _ =
+            app.notification().builder().title("Resource Monitor").body(format!("Сторож не переключён: {e}")).show();
     }
     let state = app.state::<AppState>();
     update_tray(app, &state, None);
@@ -248,7 +268,11 @@ fn subscribe(state: tauri::State<'_, AppState>, channel: Channel<Arc<Dashboard>>
 
 /// Подробности процесса.
 #[tauri::command]
-async fn process_details(state: tauri::State<'_, AppState>, pid: i32, started_at: u64) -> Result<ProcessDetails, String> {
+async fn process_details(
+    state: tauri::State<'_, AppState>,
+    pid: i32,
+    started_at: u64,
+) -> Result<ProcessDetails, String> {
     let m = state.monitor()?;
     tauri::async_runtime::spawn_blocking(move || m.details(pid, Some(started_at)))
         .await
@@ -277,6 +301,30 @@ async fn kill_process(
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())
+}
+
+/// Снять несколько процессов сразу (группа брошенных копий): параллельно, одно обновление сводки.
+/// Итоги — в порядке `targets`: успех или текст отказа.
+#[tauri::command]
+async fn kill_processes(
+    state: tauri::State<'_, AppState>,
+    targets: Vec<(i32, u64)>,
+    confirm: bool,
+    reason: String,
+) -> Result<Vec<Result<KillOutcome, String>>, String> {
+    let m = state.monitor()?;
+    let req = KillRequest {
+        signal_term_grace: Duration::from_secs(5),
+        confirm,
+        requested_by: Requester::App,
+        reason: if reason.trim().is_empty() { "из окна, группой".into() } else { reason },
+        dry_run: false,
+    };
+    tauri::async_runtime::spawn_blocking(move || {
+        m.kill_many(&targets, &req).into_iter().map(|r| r.map_err(|e| e.to_string())).collect()
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 /// Журналы rmon, сторожа и старого memory-guard, новые сверху.
@@ -370,6 +418,7 @@ pub fn run() {
             subscribe,
             process_details,
             kill_process,
+            kill_processes,
             read_journal,
             guard_status,
             guard_retire_legacy,

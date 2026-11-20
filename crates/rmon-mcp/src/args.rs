@@ -182,7 +182,8 @@ mod tests {
         let a: ListArgs = parse(json!({})).unwrap();
         assert_eq!((a.sort, a.limit, a.filter.is_none(), a.group_by_app), (SortKey::Mem, 25, true, false));
         assert!(a.check().is_ok());
-        for (s, k) in [("mem", SortKey::Mem), ("cpu", SortKey::Cpu), ("growth", SortKey::Growth), ("pid", SortKey::Pid)] {
+        for (s, k) in [("mem", SortKey::Mem), ("cpu", SortKey::Cpu), ("growth", SortKey::Growth), ("pid", SortKey::Pid)]
+        {
             let a: ListArgs = parse(json!({"sort": s, "limit": 3, "filter": "node", "group_by_app": true})).unwrap();
             assert_eq!(a.sort, k);
             assert_eq!(a.sort.as_str(), s);
@@ -204,7 +205,8 @@ mod tests {
         assert!(parse::<KillArgs>(json!({"pid": 42, "reason": "  "})).unwrap().check().is_err());
         assert!(parse::<KillArgs>(json!({"pid": 0, "reason": "x"})).unwrap().check().is_err());
         assert!(parse::<KillArgs>(json!({"pid": -5, "reason": "x"})).unwrap().check().is_err());
-        let a: KillArgs = parse(json!({"pid": 7, "reason": "x", "confirm": true, "hard": true, "dry_run": true})).unwrap();
+        let a: KillArgs =
+            parse(json!({"pid": 7, "reason": "x", "confirm": true, "hard": true, "dry_run": true})).unwrap();
         assert!(a.confirm && a.hard && a.dry_run);
         let err = parse::<KillArgs>(json!({"pid": 0, "reason": "x"})).unwrap().validate().unwrap_err();
         assert_eq!(err.code, rmcp::model::ErrorCode::INVALID_PARAMS);

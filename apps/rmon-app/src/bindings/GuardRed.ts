@@ -15,7 +15,7 @@ min_available_pct: number,
 /**
  * Страховка: своп не меньше, МБ…
  */
-swap_red_mb: bigint, 
+swap_red_mb: number, 
 /**
  * …при давлении от этого уровня.
  */

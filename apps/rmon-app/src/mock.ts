@@ -2,7 +2,8 @@
 // api.ts imports it dynamically only when not running inside Tauri.
 
 import type { Backend } from "./api";
-import { fmtAge, fmtBytes, fmtGrowth } from "./format";
+import { cmdHint, fmtAge, fmtBytes, fmtGrowth, plural } from "./format";
+import { createMockGuard } from "./mockGuard";
 import type {
   AppGroup,
   HistoryPoint,
@@ -304,12 +305,15 @@ function toRow(p: MockProc, now: number): ProcessRow {
     state: p.state,
     started_at: p.started_at,
     app_group: p.app_group,
+    // Like rmon-core: the working directory is collected only for dev processes.
+    cwd: CWD_NAMES.has(p.name) && p.uid === USER_UID ? p.cwd : null,
     growth_per_min: age < 60 || p.state === "zombie" ? null : p.rate + (p.rate ? between(-0.1, 0.1) * p.rate : between(-0.04, 0.04) * MB),
     policy: p.policy,
   };
 }
 
 const DEV = new Set(["node", "bun", "python3", "tsgo", "claude", "cargo", "rustc", "esbuild"]);
+const CWD_NAMES = new Set([...DEV, "zsh", "python", "deno", "uv"]);
 const cmdOf = (r: { args: string[]; exe: string | null; name: string }) =>
   (r.args.length ? r.args.join(" ") : r.exe ?? r.name).slice(0, 200);
 
@@ -320,8 +324,10 @@ function analyze(rows: ProcessRow[], now: number): Suspect[] {
   for (const r of rows) if (r.ppid === 1 && DEV.has(r.name)) orphanCount.set(cmdOf(r), (orphanCount.get(cmdOf(r)) ?? 0) + 1);
   const base = (r: ProcessRow) => {
     const cmd = cmdOf(r);
+    const copies = r.ppid === 1 ? orphanCount.get(cmd) ?? 0 : 0;
     return { pid: r.pid, name: r.name, app_group: r.app_group, started_at: r.started_at, policy: r.policy, cmd,
-      group: r.ppid === 1 && (orphanCount.get(cmd) ?? 0) >= 2 ? `copies:${cmd}` : null };
+      group: copies >= 2 ? `copies:${cmd}` : null,
+      group_label: copies >= 2 ? `${copies} ${plural(copies, "брошенная копия", "брошенные копии", "брошенных копий")} «${cmdHint(r.name, cmd)}»` : null };
   };
   const dupes = new Map<string, ProcessRow[]>();
   for (const r of rows) {
@@ -400,12 +406,15 @@ function makeDashboard(now: number): Dashboard {
 }
 
 let current: Dashboard = makeDashboard(now0);
+const guard = createMockGuard(() => current);
+guard.tick(current);
 
 const journal: JournalEntry[] = [
   { source: "rmon", ts: now0 - 640, text: "app: снят node (48120) SIGTERM, освобождено 1,2 ГБ — «зависший vite»", raw: { requested_by: "app", pid: 48120 } },
   { source: "memory-guard", ts: now0 - 1900, text: "красная зона: снят tsgo (39911) 4,6 ГБ, своп 15,1 ГБ", raw: { action: "kill", pid: 39911, rss_mb: 4710 } },
   { source: "rmon", ts: now0 - 3600, text: "mcp: отказ — WindowServer защищён", raw: { requested_by: "mcp", pid: 152, refused: true } },
   { source: "memory-guard", ts: now0 - 7200, text: "жёлтая зона: давление повышенное, своп 11,4 ГБ — без действий", raw: { level: "warning" } },
+  { source: "guard", ts: now0 - 1900, text: "сторож: убит tsgo (39911) 4,6 ГБ — проект M Code, Claude Code «Старт»", raw: { ev: "kill", pid: 39911 } },
   { source: "memory-guard", ts: null, text: "сторож запущен (интервал 10 с)", raw: { event: "start" } },
 ];
 
@@ -422,6 +431,7 @@ function ensureTimer() {
     const now = Math.floor(Date.now() / 1000);
     tickProcs(now);
     current = makeDashboard(now);
+    guard.tick(current);
     publish();
   }, TICK_S * 1000);
 }
@@ -522,6 +532,25 @@ export function createMockBackend(): Backend {
       await delay(150);
       return journal.slice();
     },
+    killMany: async (targets, confirm, reason) => {
+      const out = await Promise.all(
+        targets.map(([pid, startedAt]) =>
+          kill({ pid, startedAt, confirm, reason }).then(
+            (o) => ({ Ok: o }) as const,
+            (e) => ({ Err: String(e) }) as const,
+          ),
+        ),
+      );
+      return out;
+    },
+    guardStatus: guard.guardStatus,
+    onGuardEvent: guard.onGuardEvent,
+    retireLegacy: guard.retireLegacy,
+    restoreLegacy: guard.restoreLegacy,
+    getSettings: guard.getSettings,
+    saveSettings: guard.saveSettings,
+    openConfig: guard.openConfig,
+    onOpenTab: guard.onOpenTab,
   };
 }
 

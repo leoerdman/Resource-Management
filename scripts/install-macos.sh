@@ -19,6 +19,9 @@ codesign --force --deep --sign - "$BUNDLE"
 if pgrep -f "$DEST/Contents/MacOS/rmon-app" >/dev/null; then
   osascript -e "tell application \"$APP_NAME\" to quit" >/dev/null 2>&1 || true
   for _ in $(seq 1 20); do pgrep -f "$DEST/Contents/MacOS/rmon-app" >/dev/null || break; sleep 0.25; done
+  # Не вышло вежливо — снимаем свой же старый экземпляр (сторож в нём отпустит блокировку).
+  pkill -f "$DEST/Contents/MacOS/rmon-app" 2>/dev/null || true
+  sleep 1
 fi
 rm -rf "$DEST"
 cp -R "$BUNDLE" "$DEST"

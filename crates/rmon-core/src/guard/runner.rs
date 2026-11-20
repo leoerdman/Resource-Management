@@ -163,7 +163,9 @@ impl GuardEvent {
             EventKind::WouldKill { victim, author, .. } => {
                 format!("проба: снял бы {} {} — {}", victim.kind, fmt::bytes(victim.mem), author::describe(author))
             }
-            EventKind::NoVictim { why, rejected } => format!("красно ({why}), снять некого; крупных не тронуто: {}", rejected.len()),
+            EventKind::NoVictim { why, rejected } => {
+                format!("красно ({why}), снять некого; крупных не тронуто: {}", rejected.len())
+            }
             EventKind::Limit { why } => format!("лимит: {why}"),
             EventKind::ConfigError { error } => format!("настройки сторожа не разобраны: {error}"),
         }
@@ -225,7 +227,8 @@ fn append_event(ev: &GuardEvent, max_bytes: u64) {
     if std::fs::metadata(&path).is_ok_and(|m| m.len() > max_bytes) {
         let _ = std::fs::rename(&path, path.with_extension("old.jsonl"));
     }
-    if let (Ok(mut f), Ok(line)) = (OpenOptions::new().create(true).append(true).open(&path), serde_json::to_string(ev)) {
+    if let (Ok(mut f), Ok(line)) = (OpenOptions::new().create(true).append(true).open(&path), serde_json::to_string(ev))
+    {
         let _ = writeln!(f, "{line}");
     }
 }
@@ -233,7 +236,8 @@ fn append_event(ev: &GuardEvent, max_bytes: u64) {
 /// Последние события из журнала, новые сверху.
 pub fn read_events(limit: usize) -> Vec<GuardEvent> {
     let Ok(text) = std::fs::read_to_string(events_log()) else { return Vec::new() };
-    let mut out: Vec<GuardEvent> = text.lines().rev().filter_map(|l| serde_json::from_str(l).ok()).take(limit).collect();
+    let mut out: Vec<GuardEvent> =
+        text.lines().rev().filter_map(|l| serde_json::from_str(l).ok()).take(limit).collect();
     out.shrink_to_fit();
     out
 }
@@ -294,7 +298,12 @@ impl GuardHandle {
     }
 
     /// Включить/выключить, проба, уведомления — запись в `config.toml` и немедленное применение.
-    pub fn set(&self, enabled: Option<bool>, dry_run: Option<bool>, notify: Option<bool>) -> Result<GuardStatus, String> {
+    pub fn set(
+        &self,
+        enabled: Option<bool>,
+        dry_run: Option<bool>,
+        notify: Option<bool>,
+    ) -> Result<GuardStatus, String> {
         persist_flags(enabled, dry_run, notify)?;
         let _ = self.tx.send(Msg::Reload);
         // Применение — на следующем шаге потока; ждём его коротко, чтобы вернуть свежий статус.
@@ -465,15 +474,28 @@ impl Runner {
             match obs.decision {
                 Decision::Wait => {}
                 Decision::Limited { why } => self.emit(EventKind::Limit { why }, Some(pressure.clone()), None),
-                Decision::NoVictim { why, rejected } => self.emit(EventKind::NoVictim { why, rejected }, Some(pressure.clone()), None),
-                Decision::Act { victim, why, red_for_secs } => self.act(&cfg, snap, victim, why, red_for_secs, pressure, now_ms),
+                Decision::NoVictim { why, rejected } => {
+                    self.emit(EventKind::NoVictim { why, rejected }, Some(pressure.clone()), None)
+                }
+                Decision::Act { victim, why, red_for_secs } => {
+                    self.act(&cfg, snap, victim, why, red_for_secs, pressure, now_ms)
+                }
             }
         }
         self.publish(obs.zone_why, self.guard.red_for_secs(now_ms));
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn act(&mut self, cfg: &GuardConfig, snap: &Snapshot, victim: Candidate, why: String, red_for_secs: u64, pressure: PressureFields, now_ms: u64) {
+    fn act(
+        &mut self,
+        cfg: &GuardConfig,
+        snap: &Snapshot,
+        victim: Candidate,
+        why: String,
+        red_for_secs: u64,
+        pressure: PressureFields,
+        now_ms: u64,
+    ) {
         let author = author::gather(snap, victim.pid, self.platform.as_mut());
         let line = format!("{} {} — {}, {why}", victim.kind, fmt::bytes(victim.mem), author::describe(&author));
         if cfg.dry_run {

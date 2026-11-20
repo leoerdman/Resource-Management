@@ -149,11 +149,7 @@ pub struct SystemMemory {
 impl SystemMemory {
     /// Доля занятой памяти, проценты.
     pub fn used_pct(&self) -> f64 {
-        if self.total == 0 {
-            0.0
-        } else {
-            self.used as f64 * 100.0 / self.total as f64
-        }
+        if self.total == 0 { 0.0 } else { self.used as f64 * 100.0 / self.total as f64 }
     }
 
     /// Свободно с учётом кэша: то, что система отдаст под новые задачи.
@@ -286,11 +282,7 @@ impl Snapshot {
 
     /// Память, которую вернут снятые процессы из списка.
     pub fn reclaimed(&self, pids: &[i32]) -> u64 {
-        self.processes
-            .iter()
-            .filter(|p| pids.contains(&p.pid))
-            .map(ProcessInfo::reclaim)
-            .sum()
+        self.processes.iter().filter(|p| pids.contains(&p.pid)).map(ProcessInfo::reclaim).sum()
     }
 }
 

@@ -1,4 +1,10 @@
-import type { Dashboard, JournalEntry, KillArgs, KillOutcome, ProcessDetails } from "./types";
+import type { Dashboard, GuardEvent, GuardStatus, JournalEntry, KillArgs, KillOutcome, ProcessDetails, Settings } from "./types";
+
+/** Rust `Result<KillOutcome, String>` as serde sends it. */
+export type KillManyResult = { Ok: KillOutcome } | { Err: string };
+
+/** Tabs the menu-bar icon may ask to open. */
+export type OpenTab = "settings" | "guard" | "suspects";
 
 export interface Backend {
   /**
@@ -9,12 +15,32 @@ export interface Backend {
   details(pid: number, startedAt: number): Promise<ProcessDetails>;
   kill(args: KillArgs): Promise<KillOutcome>;
   readJournal(): Promise<JournalEntry[]>;
+  /** Kill several at once (in parallel on the backend, one dashboard push). Results follow `targets`. */
+  killMany(targets: [number, number][], confirm: boolean, reason: string): Promise<KillManyResult[]>;
+
+  guardStatus(): Promise<GuardStatus>;
+  /** Every guard event while the window is visible. Resolves to an unsubscribe function. */
+  onGuardEvent(cb: (e: GuardEvent) => void): Promise<() => void>;
+  /** Unload the old memory-guard LaunchAgent (reversible). */
+  retireLegacy(): Promise<GuardStatus>;
+  restoreLegacy(): Promise<GuardStatus>;
+
+  getSettings(): Promise<Settings>;
+  /** Validated by the backend; rejects with a Russian message. Applied immediately. */
+  saveSettings(settings: Settings): Promise<Settings>;
+  /** Open config.toml in the default editor. */
+  openConfig(): Promise<void>;
+  /** The menu-bar icon asks the window to show a tab. */
+  onOpenTab(cb: (tab: OpenTab) => void): Promise<() => void>;
 }
 
 export const IS_TAURI = typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
 
 async function tauriBackend(): Promise<Backend> {
-  const { Channel, invoke } = await import("@tauri-apps/api/core");
+  const [{ Channel, invoke }, { listen }] = await Promise.all([
+    import("@tauri-apps/api/core"),
+    import("@tauri-apps/api/event"),
+  ]);
   return {
     subscribe: async (cb) => {
       let live = true;
@@ -31,6 +57,15 @@ async function tauriBackend(): Promise<Backend> {
     details: (pid, startedAt) => invoke<ProcessDetails>("process_details", { pid, startedAt }),
     kill: (args) => invoke<KillOutcome>("kill_process", { ...args }),
     readJournal: () => invoke<JournalEntry[]>("read_journal"),
+    killMany: (targets, confirm, reason) => invoke<KillManyResult[]>("kill_processes", { targets, confirm, reason }),
+    guardStatus: () => invoke<GuardStatus>("guard_status"),
+    onGuardEvent: (cb) => listen<GuardEvent>("rmon://guard", (e) => cb(e.payload)),
+    retireLegacy: () => invoke<GuardStatus>("guard_retire_legacy"),
+    restoreLegacy: () => invoke<GuardStatus>("guard_restore_legacy"),
+    getSettings: () => invoke<Settings>("get_settings"),
+    saveSettings: (settings) => invoke<Settings>("save_settings", { settings }),
+    openConfig: () => invoke<void>("open_config"),
+    onOpenTab: (cb) => listen<string>("rmon://open-tab", (e) => cb(e.payload as OpenTab)),
   };
 }
 

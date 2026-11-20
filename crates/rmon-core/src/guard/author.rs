@@ -110,19 +110,15 @@ pub struct Author {
 }
 
 fn base(p: &ProcessInfo) -> String {
-    p.exe
-        .as_deref()
-        .and_then(|e| Path::new(e).file_name())
-        .and_then(|n| n.to_str())
-        .unwrap_or(&p.name)
-        .to_string()
+    p.exe.as_deref().and_then(|e| Path::new(e).file_name()).and_then(|n| n.to_str()).unwrap_or(&p.name).to_string()
 }
 
 static CLAUDE_ARGS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"claude-code/[^ ]*/claude(\s|$)").unwrap());
 static MCODE_PATH: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"M Code Desktop[^/]*\.app/").unwrap());
 static MCODE_ARGS: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(^|/)mcode-engine(\s|$)").unwrap());
-static HOOKISH: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(\.claude/hooks/|Programming - Main/Hooks/|/hooks?/[^ ]+\.(ts|js|sh|py)(\s|$))").unwrap());
+static HOOKISH: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(\.claude/hooks/|Programming - Main/Hooks/|/hooks?/[^ ]+\.(ts|js|sh|py)(\s|$))").unwrap()
+});
 static RESUME: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"--resume[= ]([0-9a-f-]{36})").unwrap());
 static TERMINALS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
     [
@@ -147,7 +143,10 @@ fn is_claude_cli(p: &ProcessInfo) -> bool {
 
 fn is_mcode(p: &ProcessInfo) -> bool {
     let b = base(p);
-    b == "mcode" || b == "mcode-engine" || p.exe.as_deref().is_some_and(|e| MCODE_PATH.is_match(e)) || MCODE_ARGS.is_match(&p.command_line())
+    b == "mcode"
+        || b == "mcode-engine"
+        || p.exe.as_deref().is_some_and(|e| MCODE_PATH.is_match(e))
+        || MCODE_ARGS.is_match(&p.command_line())
 }
 
 /// Цепочка от процесса вверх, до init (сам процесс — первым).
@@ -180,15 +179,20 @@ pub fn origin_of(chain: &[&ProcessInfo], victim_env: &Env, session_env: &Env) ->
         return Origin::ClaudeCode {
             via: if hook { "hook" } else { "bash" }.into(),
             session_id: get(victim_env, "CLAUDE_CODE_SESSION_ID").or(resume),
-            host_session_id: get(victim_env, "CLAUDE_CODE_HOST_SESSION_ID").or_else(|| get(session_env, "CLAUDE_CODE_HOST_SESSION_ID")),
+            host_session_id: get(victim_env, "CLAUDE_CODE_HOST_SESSION_ID")
+                .or_else(|| get(session_env, "CLAUDE_CODE_HOST_SESSION_ID")),
             title: get(session_env, "CLAUDE_CODE_SESSION_NAME").or_else(|| get(victim_env, "CLAUDE_CODE_SESSION_NAME")),
-            entrypoint: get(victim_env, "CLAUDE_CODE_ENTRYPOINT").or_else(|| get(session_env, "CLAUDE_CODE_ENTRYPOINT")),
+            entrypoint: get(victim_env, "CLAUDE_CODE_ENTRYPOINT")
+                .or_else(|| get(session_env, "CLAUDE_CODE_ENTRYPOINT")),
             session_pid: cli.pid,
         };
     }
     let mcode_at = chain.iter().position(|p| is_mcode(p)).filter(|&i| i > 0);
     if mcode_at.is_some() || victim_env.contains_key("MCODE_SESSION_ID") {
-        return Origin::Mcode { session_id: get(victim_env, "MCODE_SESSION_ID"), session_pid: mcode_at.map(|i| chain[i].pid) };
+        return Origin::Mcode {
+            session_id: get(victim_env, "MCODE_SESSION_ID"),
+            session_pid: mcode_at.map(|i| chain[i].pid),
+        };
     }
     for p in chain {
         if let Some(exe) = &p.exe
@@ -207,13 +211,16 @@ pub fn origin_of(chain: &[&ProcessInfo], victim_env: &Env, session_env: &Env) ->
         return Origin::LaunchAgent { label };
     }
     match chain.last() {
-        Some(top) if top.ppid == 1 && chain.len() <= 2 && !top.exe.as_deref().unwrap_or("").contains(".app/") => Origin::Orphan,
+        Some(top) if top.ppid == 1 && chain.len() <= 2 && !top.exe.as_deref().unwrap_or("").contains(".app/") => {
+            Origin::Orphan
+        }
         Some(top) => Origin::Unknown { top: base(top) },
         None => Origin::Unknown { top: "?".into() },
     }
 }
 
-static LANE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"TEMPORARY/mcode/lanes/([^/]+)|\.claude/worktrees/([^/]+)").unwrap());
+static LANE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"TEMPORARY/mcode/lanes/([^/]+)|\.claude/worktrees/([^/]+)").unwrap());
 static PROJECT: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"Programming - Main/([^/]+)").unwrap());
 static SCRATCH: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"-Programming---Main-([^/]+)").unwrap());
 

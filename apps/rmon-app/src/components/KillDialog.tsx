@@ -50,6 +50,36 @@ export function KillDialog({ req, onCancel, onResult }: Props) {
 
   async function run() {
     const b = await backend();
+    if (!single) {
+      // Batch: the backend kills in parallel and pushes one fresh dashboard.
+      setProgress(0);
+      let done = 0;
+      let freed = 0;
+      let lastErr = "";
+      const killed: ProcKey[] = [];
+      try {
+        const res = await b.killMany(
+          targets.map((t) => [t.pid, t.started_at]),
+          risky.length > 0,
+          req.title ? `окно, «Снять все»: ${req.title}` : targets[0].reason,
+        );
+        res.forEach((r, i) => {
+          if ("Ok" in r) {
+            if (r.Ok.exited) {
+              done++;
+              freed += r.Ok.reclaimed;
+              killed.push({ pid: targets[i].pid, started_at: targets[i].started_at });
+            }
+          } else lastErr = r.Err;
+        });
+      } catch (e) {
+        lastErr = errText(e);
+      }
+      const text =
+        `Снято ${done} из ${targets.length}, освобождено ${fmtBytes(freed)}` + (lastErr ? `. Последняя ошибка: ${lastErr}` : "");
+      onResult({ ok: done > 0, text, killed });
+      return;
+    }
     // One by one: each kill waits for SIGTERM grace, and the backend re-checks identity each time.
     let done = 0;
     let freed = 0;
@@ -129,7 +159,7 @@ export function KillDialog({ req, onCancel, onResult }: Props) {
           </ul>
         )}
         <p className="dim">
-          {single ? "Сначала SIGTERM" : "По одному: сначала SIGTERM"}, через несколько секунд — SIGKILL, если процесс не
+          {single ? "Сначала SIGTERM" : "Все сразу: сначала SIGTERM"}, через несколько секунд — SIGKILL, если процесс не
           завершится.
           {reclaim > 0 && <> Освободит около {fmtBytes(reclaim)}.</>}
         </p>
@@ -141,7 +171,7 @@ export function KillDialog({ req, onCancel, onResult }: Props) {
             {busy
               ? single
                 ? "Снимаю…"
-                : `Снимаю ${progress + 1} из ${targets.length}…`
+                : `Снимаю ${targets.length}…`
               : risky.length
                 ? single
                   ? "Всё равно снять"

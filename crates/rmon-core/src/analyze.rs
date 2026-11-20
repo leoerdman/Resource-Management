@@ -141,16 +141,14 @@ const DEV_NAMES: &[&str] = &[
 
 /// Dev-процесс: у таких одинаковые имена, и различает их только строка запуска и каталог.
 pub fn is_dev(name: &str) -> bool {
-    DEV_NAMES.iter().any(|d| name == *d || (name.starts_with(d) && name[d.len()..].chars().all(|c| c.is_ascii_digit() || c == '.')))
+    DEV_NAMES
+        .iter()
+        .any(|d| name == *d || (name.starts_with(d) && name[d.len()..].chars().all(|c| c.is_ascii_digit() || c == '.')))
 }
 
 /// Наклон памяти каждого процесса последнего снимка, байт/мин.
 pub fn growth_rates(history: &History) -> HashMap<(i32, u64), f64> {
-    history
-        .all_series()
-        .into_iter()
-        .filter_map(|(k, s)| slope_per_min(&s).map(|v| (k, v)))
-        .collect()
+    history.all_series().into_iter().filter_map(|(k, s)| slope_per_min(&s).map(|v| (k, v))).collect()
 }
 
 /// Подозреваемые по истории, по убыванию score. Один процесс — одна строка (самая весомая причина).
@@ -183,13 +181,20 @@ pub fn analyze(history: &History, th: &Thresholds) -> Vec<Suspect> {
 
     let mut best: HashMap<i32, Suspect> = HashMap::new();
     let mut put = |s: Suspect| {
-        best.entry(s.pid).and_modify(|cur| if s.score > cur.score { *cur = s.clone() }).or_insert(s);
+        best.entry(s.pid)
+            .and_modify(|cur| {
+                if s.score > cur.score {
+                    *cur = s.clone()
+                }
+            })
+            .or_insert(s);
     };
 
     for p in &last.processes {
         let mem = p.reclaim();
         let key = (p.pid, p.started_at);
-        let size_score = |base: f64| -> u8 { (base + 40.0 * (mem as f64 / (4.0 * GIB as f64)).min(1.0)).min(100.0) as u8 };
+        let size_score =
+            |base: f64| -> u8 { (base + 40.0 * (mem as f64 / (4.0 * GIB as f64)).min(1.0)).min(100.0) as u8 };
         let mk = |kind, score, reason: String| Suspect {
             pid: p.pid,
             name: p.name.clone(),
@@ -213,7 +218,12 @@ pub fn analyze(history: &History, th: &Thresholds) -> Vec<Suspect> {
             put(mk(
                 SuspectKind::Hog,
                 size_score(40.0),
-                format!("{} занимает {} ({} ОЗУ)", p.name, fmt::bytes(mem), fmt::percent(mem as f64 * 100.0 / total as f64)),
+                format!(
+                    "{} занимает {} ({} ОЗУ)",
+                    p.name,
+                    fmt::bytes(mem),
+                    fmt::percent(mem as f64 * 100.0 / total as f64)
+                ),
             ));
         }
         if let Some(s) = series.get(&key)
@@ -229,7 +239,13 @@ pub fn analyze(history: &History, th: &Thresholds) -> Vec<Suspect> {
                 put(mk(
                     SuspectKind::Growing,
                     score.min(100),
-                    format!("{} {}, растёт {} уже {}", p.name, fmt::bytes(mem), fmt::bytes_per_min(slope), fmt::duration_human(span)),
+                    format!(
+                        "{} {}, растёт {} уже {}",
+                        p.name,
+                        fmt::bytes(mem),
+                        fmt::bytes_per_min(slope),
+                        fmt::duration_human(span)
+                    ),
                 ));
             }
         }
@@ -301,7 +317,9 @@ pub fn analyze(history: &History, th: &Thresholds) -> Vec<Suspect> {
 pub fn app_groups(snapshot: &Snapshot) -> Vec<AppGroup> {
     let mut map: HashMap<&str, AppGroup> = HashMap::new();
     for p in &snapshot.processes {
-        let g = map.entry(p.app_group.as_str()).or_insert_with(|| AppGroup { name: p.app_group.clone(), ..Default::default() });
+        let g = map
+            .entry(p.app_group.as_str())
+            .or_insert_with(|| AppGroup { name: p.app_group.clone(), ..Default::default() });
         g.pids.push(p.pid);
         g.footprint += p.reclaim();
         g.count += 1;
@@ -373,14 +391,17 @@ mod tests {
     fn live_copies_are_not_duplicates() {
         let mut h = History::default();
         // MCP-серверы у своих сессий и сессии Claude Code под одним приложением — не дубли.
-        h.push(snap(1, vec![
-            p(20, "node", 80 * MIB, 101, &["node", "mcp.js"]),
-            p(21, "node", 80 * MIB, 102, &["node", "mcp.js"]),
-            p(22, "node", 80 * MIB, 103, &["node", "mcp.js"]),
-            p(23, "claude", 300 * MIB, 46516, &["claude", "--output-format", "stream-json"]),
-            p(24, "claude", 300 * MIB, 46516, &["claude", "--output-format", "stream-json"]),
-            p(25, "claude", 300 * MIB, 46516, &["claude", "--output-format", "stream-json"]),
-        ]));
+        h.push(snap(
+            1,
+            vec![
+                p(20, "node", 80 * MIB, 101, &["node", "mcp.js"]),
+                p(21, "node", 80 * MIB, 102, &["node", "mcp.js"]),
+                p(22, "node", 80 * MIB, 103, &["node", "mcp.js"]),
+                p(23, "claude", 300 * MIB, 46516, &["claude", "--output-format", "stream-json"]),
+                p(24, "claude", 300 * MIB, 46516, &["claude", "--output-format", "stream-json"]),
+                p(25, "claude", 300 * MIB, 46516, &["claude", "--output-format", "stream-json"]),
+            ],
+        ));
         assert!(analyze(&h, &Thresholds::default()).iter().all(|x| x.kind != SuspectKind::Duplicate));
     }
 

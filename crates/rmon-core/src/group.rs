@@ -28,11 +28,7 @@ pub fn app_group(name: &str, exe: Option<&str>) -> String {
             return (*group).to_string();
         }
     }
-    if name.is_empty() {
-        "неизвестный".to_string()
-    } else {
-        name.to_string()
-    }
+    if name.is_empty() { "неизвестный".to_string() } else { name.to_string() }
 }
 
 /// То же по готовому процессу.
@@ -47,9 +43,7 @@ pub fn app_group_for(process: &ProcessInfo) -> String {
 /// Имя приложения из пути: первый (самый внешний) компонент `*.app` в пути.
 pub fn bundle_stem(path: &str) -> Option<&str> {
     for component in path.split('/') {
-        if let Some(stem) = component
-            .strip_suffix(".app")
-            .or_else(|| component.strip_suffix(".APP"))
+        if let Some(stem) = component.strip_suffix(".app").or_else(|| component.strip_suffix(".APP"))
             && !stem.is_empty()
         {
             return Some(stem);
@@ -93,19 +87,10 @@ mod tests {
     #[test]
     fn names_app_from_bundle_path() {
         assert_eq!(
-            app_group(
-                "Google Chrome",
-                Some("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
-            ),
+            app_group("Google Chrome", Some("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")),
             "Google Chrome"
         );
-        assert_eq!(
-            app_group(
-                "Telegram",
-                Some("/Applications/Telegram.app/Contents/MacOS/Telegram")
-            ),
-            "Telegram"
-        );
+        assert_eq!(app_group("Telegram", Some("/Applications/Telegram.app/Contents/MacOS/Telegram")), "Telegram");
     }
 
     #[test]
@@ -113,50 +98,39 @@ mod tests {
         assert_eq!(
             app_group(
                 "Google Chrome Helper (Renderer)",
-                Some("/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/140.0/Helpers/Google Chrome Helper (Renderer).app/Contents/MacOS/Google Chrome Helper (Renderer)")
+                Some(
+                    "/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/140.0/Helpers/Google Chrome Helper (Renderer).app/Contents/MacOS/Google Chrome Helper (Renderer)"
+                )
             ),
             "Google Chrome"
         );
         assert_eq!(
             app_group(
                 "M Code Desktop Helper (Renderer)",
-                Some("/Applications/M Code Desktop.app/Contents/Frameworks/M Code Desktop Helper (Renderer).app/Contents/MacOS/M Code Desktop Helper (Renderer)")
+                Some(
+                    "/Applications/M Code Desktop.app/Contents/Frameworks/M Code Desktop Helper (Renderer).app/Contents/MacOS/M Code Desktop Helper (Renderer)"
+                )
             ),
             "M Code Desktop"
         );
-        assert_eq!(
-            app_group("M Code Desktop Helper (GPU)", None),
-            "M Code Desktop"
-        );
+        assert_eq!(app_group("M Code Desktop Helper (GPU)", None), "M Code Desktop");
     }
 
     #[test]
     fn strips_version_from_bundle_name() {
-        assert_eq!(
-            app_group("X", Some("/Applications/M Code Desktop 1.4.2.app/Contents/MacOS/x")),
-            "M Code Desktop"
-        );
+        assert_eq!(app_group("X", Some("/Applications/M Code Desktop 1.4.2.app/Contents/MacOS/x")), "M Code Desktop");
     }
 
     #[test]
     fn falls_back_to_process_name() {
-        assert_eq!(
-            app_group(
-                "node",
-                Some("/opt/homebrew/Cellar/node/25/bin/node")
-            ),
-            "node"
-        );
+        assert_eq!(app_group("node", Some("/opt/homebrew/Cellar/node/25/bin/node")), "node");
         assert_eq!(app_group("claude", None), "claude");
         assert_eq!(app_group("", None), "неизвестный");
     }
 
     #[test]
     fn sees_bundles_anywhere() {
-        assert_eq!(
-            bundle_stem("/Users/x/Applications/Foo.app/Contents/MacOS/Foo"),
-            Some("Foo")
-        );
+        assert_eq!(bundle_stem("/Users/x/Applications/Foo.app/Contents/MacOS/Foo"), Some("Foo"));
         assert_eq!(bundle_stem("/usr/bin/yes"), None);
         assert!(in_app_bundle("/System/Library/CoreServices/Finder.app/Contents/MacOS/Finder"));
     }

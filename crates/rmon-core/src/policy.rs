@@ -73,7 +73,12 @@ impl Rule {
                 .map(|s| Regex::new(s).map_err(|e| format!("правило «{}», поле {field}: {e}", spec.name)))
                 .transpose()
         };
-        Ok(Self { name: spec.name.clone(), exe: re("exe", &spec.exe)?, path: re("path", &spec.path)?, args: re("args", &spec.args)? })
+        Ok(Self {
+            name: spec.name.clone(),
+            exe: re("exe", &spec.exe)?,
+            path: re("path", &spec.path)?,
+            args: re("args", &spec.args)?,
+        })
     }
 
     /// Совпадает ли процесс: все заданные поля, хотя бы одно задано.
@@ -83,7 +88,11 @@ impl Rule {
         }
         let exe_ok = self.exe.as_ref().is_none_or(|re| {
             re.is_match(&p.name)
-                || p.exe.as_deref().and_then(|e| Path::new(e).file_name()).and_then(|n| n.to_str()).is_some_and(|n| re.is_match(n))
+                || p.exe
+                    .as_deref()
+                    .and_then(|e| Path::new(e).file_name())
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| re.is_match(n))
         });
         let path_ok = self.path.as_ref().is_none_or(|re| p.exe.as_deref().is_some_and(|e| re.is_match(e)));
         let args_ok = self.args.as_ref().is_none_or(|re| re.is_match(&p.args.join(" ")));
@@ -170,10 +179,7 @@ impl Policy {
     fn from_specs(protect: &[RuleSpec], confirm: &[RuleSpec]) -> (Self, Vec<String>) {
         let mut errors = Vec::new();
         let mut compile = |specs: &[RuleSpec]| -> Vec<Rule> {
-            specs
-                .iter()
-                .filter_map(|s| Rule::compile(s).map_err(|e| errors.push(e)).ok())
-                .collect()
+            specs.iter().filter_map(|s| Rule::compile(s).map_err(|e| errors.push(e)).ok()).collect()
         };
         let protect = compile(protect);
         let confirm = compile(confirm);
@@ -196,7 +202,10 @@ impl Policy {
             return KillPolicy::Protected(r.name.clone());
         }
         if let Some(r) = self.confirm.iter().find(|r| r.matches(p)) {
-            let redundant = p.app_group.is_empty() || p.app_group == p.name || r.name.contains(&p.app_group) || p.app_group.contains(&r.name);
+            let redundant = p.app_group.is_empty()
+                || p.app_group == p.name
+                || r.name.contains(&p.app_group)
+                || p.app_group.contains(&r.name);
             let app = if redundant { String::new() } else { format!(": {}", p.app_group) };
             return KillPolicy::Confirm(format!("{}{app}", r.name));
         }
@@ -204,7 +213,8 @@ impl Policy {
     }
 }
 
-static GLOBAL: LazyLock<RwLock<(u64, Arc<Policy>)>> = LazyLock::new(|| RwLock::new((u64::MAX, Arc::new(Policy::builtin()))));
+static GLOBAL: LazyLock<RwLock<(u64, Arc<Policy>)>> =
+    LazyLock::new(|| RwLock::new((u64::MAX, Arc::new(Policy::builtin()))));
 
 /// Политика процесса — из [`config::global`]; пересобирается, когда меняется поколение настроек.
 pub fn global() -> Arc<Policy> {
@@ -258,14 +268,31 @@ mod tests {
         assert!(matches!(p.classify(&proc(1, "launchd", Some("/sbin/launchd"), &[])), KillPolicy::Protected(_)));
         let ws = p.classify(&proc(400, "WindowServer", None, &[]));
         assert!(!ws.killable(), "{ws:?}");
-        assert!(matches!(p.classify(&proc(401, "cfprefsd", Some("/usr/sbin/cfprefsd"), &[])), KillPolicy::Protected(_)));
         assert!(matches!(
-            p.classify(&proc(500, "Google Chrome Helper", Some("/Applications/Google Chrome.app/Contents/Frameworks/x"), &[])),
+            p.classify(&proc(401, "cfprefsd", Some("/usr/sbin/cfprefsd"), &[])),
+            KillPolicy::Protected(_)
+        ));
+        assert!(matches!(
+            p.classify(&proc(
+                500,
+                "Google Chrome Helper",
+                Some("/Applications/Google Chrome.app/Contents/Frameworks/x"),
+                &[]
+            )),
             KillPolicy::Confirm(_)
         ));
-        assert!(matches!(p.classify(&proc(600, "claude", Some("/Users/x/.local/bin/claude"), &[])), KillPolicy::Confirm(_)));
-        assert!(matches!(p.classify(&proc(601, "sleep", Some("/bin/sleep"), &["sleep", "300"])), KillPolicy::Confirm(_)));
-        assert!(matches!(p.classify(&proc(602, "bun", None, &["bun", "/x/memory-guard/guard.ts"])), KillPolicy::Protected(_)));
+        assert!(matches!(
+            p.classify(&proc(600, "claude", Some("/Users/x/.local/bin/claude"), &[])),
+            KillPolicy::Confirm(_)
+        ));
+        assert!(matches!(
+            p.classify(&proc(601, "sleep", Some("/bin/sleep"), &["sleep", "300"])),
+            KillPolicy::Confirm(_)
+        ));
+        assert!(matches!(
+            p.classify(&proc(602, "bun", None, &["bun", "/x/memory-guard/guard.ts"])),
+            KillPolicy::Protected(_)
+        ));
         assert!(matches!(
             p.classify(&proc(603, "rmon-app", Some("/Applications/Resource Monitor.app/Contents/MacOS/rmon-app"), &[])),
             KillPolicy::Protected(_)
@@ -293,15 +320,27 @@ mod tests {
         .unwrap();
         let (p, errors) = Policy::from_config(&cfg);
         assert!(errors.is_empty(), "{errors:?}");
-        assert_eq!(p.classify(&proc(900, "node", Some("/opt/homebrew/bin/node"), &["node", "my-server.js"])), KillPolicy::Protected("мой сервер".into()));
-        assert!(matches!(p.classify(&proc(901, "ollama", Some("/opt/homebrew/bin/ollama"), &[])), KillPolicy::Confirm(_)));
+        assert_eq!(
+            p.classify(&proc(900, "node", Some("/opt/homebrew/bin/node"), &["node", "my-server.js"])),
+            KillPolicy::Protected("мой сервер".into())
+        );
+        assert!(matches!(
+            p.classify(&proc(901, "ollama", Some("/opt/homebrew/bin/ollama"), &[])),
+            KillPolicy::Confirm(_)
+        ));
     }
 
     #[test]
     fn guard_never_any_field_becomes_confirm() {
         // «движок M Code» у сторожа совпадает по exe ИЛИ по args — так же и в политике.
         let p = Policy::builtin();
-        assert!(matches!(p.classify(&proc(910, "bun", Some("/opt/homebrew/bin/bun"), &["bun", "/x/mcode-engine"])), KillPolicy::Confirm(_)));
-        assert!(matches!(p.classify(&proc(911, "mcode-engine", Some("/opt/x/mcode-engine"), &["mcode-engine"])), KillPolicy::Confirm(_)));
+        assert!(matches!(
+            p.classify(&proc(910, "bun", Some("/opt/homebrew/bin/bun"), &["bun", "/x/mcode-engine"])),
+            KillPolicy::Confirm(_)
+        ));
+        assert!(matches!(
+            p.classify(&proc(911, "mcode-engine", Some("/opt/x/mcode-engine"), &["mcode-engine"])),
+            KillPolicy::Confirm(_)
+        ));
     }
 }

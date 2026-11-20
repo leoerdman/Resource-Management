@@ -173,7 +173,10 @@ impl Settings {
             (g.min_victim_mb >= 100, "жертва меньше 100 МБ машину не спасёт — порог от 100 МБ"),
             (matches!(g.red.pressure_level, 2 | 4), "уровень давления — 2 (жёлтое) или 4 (красное)"),
             (g.red.min_available_pct <= 50, "страховка «доступно не больше» — до 50 %"),
-            (!g.limits.is_empty() && g.limits.iter().all(|l| l.max >= 1 && l.window_secs >= 10), "нужен хотя бы один предел убийств (окно от 10 с, от 1 убийства)"),
+            (
+                !g.limits.is_empty() && g.limits.iter().all(|l| l.max >= 1 && l.window_secs >= 10),
+                "нужен хотя бы один предел убийств (окно от 10 с, от 1 убийства)",
+            ),
             (self.thresholds.duplicate_count >= 2, "дубли — от двух копий"),
         ];
         match checks.iter().find(|(ok, _)| !ok) {

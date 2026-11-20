@@ -254,7 +254,8 @@ impl Monitor {
     }
 
     fn refresh_cwds(&mut self, snap: &Snapshot) {
-        let alive: std::collections::HashSet<(i32, u64)> = snap.processes.iter().map(|p| (p.pid, p.started_at)).collect();
+        let alive: std::collections::HashSet<(i32, u64)> =
+            snap.processes.iter().map(|p| (p.pid, p.started_at)).collect();
         self.cwds.retain(|k, _| alive.contains(k));
         for p in snap.processes.iter().filter(|p| is_dev(&p.name)) {
             let key = (p.pid, p.started_at);
@@ -466,6 +467,44 @@ impl MonitorHandle {
     /// Снять процесс через защитный слой. Цель ищется в последнем снимке (и сверяется ядром
     /// заново перед сигналом); при успехе сводка сразу обновляется и уходит слушателю.
     pub fn kill(&self, pid: i32, started_at: Option<u64>, req: KillRequest) -> Result<KillOutcome> {
+        let (target, outcome) = self.kill_quiet(pid, started_at, req)?;
+        if outcome.exited {
+            self.forget_and_notify(&[(target.pid, target.started_at, outcome.reclaimed)]);
+        }
+        Ok(outcome)
+    }
+
+    /// Снять несколько процессов параллельно (каждый — через защитный слой со своим ожиданием
+    /// SIGTERM), сводка обновляется и уходит слушателю один раз. Итоги — в порядке `targets`.
+    pub fn kill_many(&self, targets: &[(i32, u64)], req: &KillRequest) -> Vec<Result<KillOutcome>> {
+        let results: Vec<Result<(ProcessInfo, KillOutcome)>> = std::thread::scope(|scope| {
+            let handles: Vec<_> = targets
+                .iter()
+                .map(|&(pid, started_at)| scope.spawn(move || self.kill_quiet(pid, Some(started_at), req.clone())))
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| {
+                    h.join().unwrap_or_else(|_| {
+                        Err(Error::Invalid { what: "снятие", detail: "поток упал".into() })
+                    })
+                })
+                .collect()
+        });
+        let gone: Vec<(i32, u64, u64)> = results
+            .iter()
+            .filter_map(|r| r.as_ref().ok())
+            .filter(|(_, o)| o.exited)
+            .map(|(t, o)| (t.pid, t.started_at, o.reclaimed))
+            .collect();
+        if !gone.is_empty() {
+            self.forget_and_notify(&gone);
+        }
+        results.into_iter().map(|r| r.map(|(_, o)| o)).collect()
+    }
+
+    /// Найти цель (в снимке, иначе свежим чтением) и снять, не трогая сводку.
+    fn kill_quiet(&self, pid: i32, started_at: Option<u64>, req: KillRequest) -> Result<(ProcessInfo, KillOutcome)> {
         // Процесс моложе последнего снимка — читаем его заново; отказ политики всё равно
         // пройдёт через защитный слой и попадёт в журнал действий.
         let target = match self.target(pid, started_at) {
@@ -481,19 +520,23 @@ impl MonitorHandle {
             }
         };
         let outcome = kill(&target, req)?;
-        if outcome.exited {
-            let updated = {
-                let mut published = self.published.write().unwrap_or_else(|e| e.into_inner());
-                published.dashboard.as_mut().map(|d| {
-                    Arc::make_mut(d).forget(target.pid, target.started_at, outcome.reclaimed);
-                    d.clone()
-                })
-            };
-            if let Some(d) = updated {
-                (self.listener)(&d);
-            }
+        Ok((target, outcome))
+    }
+
+    fn forget_and_notify(&self, gone: &[(i32, u64, u64)]) {
+        let updated = {
+            let mut published = self.published.write().unwrap_or_else(|e| e.into_inner());
+            published.dashboard.as_mut().map(|d| {
+                let dash = Arc::make_mut(d);
+                for &(pid, started_at, reclaimed) in gone {
+                    dash.forget(pid, started_at, reclaimed);
+                }
+                d.clone()
+            })
+        };
+        if let Some(d) = updated {
+            (self.listener)(&d);
         }
-        Ok(outcome)
     }
 }
 
