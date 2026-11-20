@@ -380,9 +380,6 @@ struct Published {
     series: Arc<SeriesMap>,
 }
 
-/// (pid, started_at) → [(t, bytes)].
-type SeriesMap = HashMap<(i32, u64), Vec<(u64, u64)>>;
-
 type Listener = Box<dyn Fn(&Arc<Dashboard>) + Send + Sync>;
 
 /// Ручка фонового монитора: читает сводку, снимает процессы. Дешёвая в клонировании.

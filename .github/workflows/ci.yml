@@ -1,0 +1,103 @@
+# Проверки на трёх ОС: clippy, тесты, сверка TS-типов с Rust, сборка фронтенда.
+#
+# `cargo fmt --check` здесь нет намеренно: репозиторий отформатирован шире rustfmt по умолчанию
+# (rustfmt.toml нет, `cargo fmt --check` даёт ~100 диффов). Появится rustfmt.toml — добавить шаг.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
+jobs:
+  rust:
+    name: Rust (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Системные библиотеки Tauri (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev patchelf
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/rmon-app/package-lock.json
+
+      # Крейт окна требует собранный фронтенд (frontendDist = ../dist).
+      - name: Фронтенд для tauri-build
+        working-directory: apps/rmon-app
+        run: |
+          npm ci
+          npm run build
+
+      # tauri-build падает без sidecar `binaries/rmon-<triple>[.exe]` (bundle.externalBin).
+      - name: Sidecar CLI для окна
+        run: node scripts/prepare-sidecar.mjs
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Тесты
+        run: cargo test --workspace --locked
+
+  bindings:
+    name: TS-типы совпадают с Rust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # `cargo test -p rmon-core` пишет ts-rs типы, labels.json и format-cases.json
+      # в apps/rmon-app/src/bindings — они должны быть закоммичены как есть.
+      - run: cargo test -p rmon-core --locked
+      - name: Нет расхождений в apps/rmon-app/src/bindings
+        run: |
+          git diff --exit-code -- apps/rmon-app/src/bindings
+          untracked=$(git status --porcelain --untracked-files=all -- apps/rmon-app/src/bindings)
+          if [ -n "$untracked" ]; then
+            echo "::error::Новые несохранённые файлы в bindings — закоммитьте их:"
+            echo "$untracked"
+            exit 1
+          fi
+
+  frontend:
+    name: Фронтенд
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/rmon-app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/rmon-app/package-lock.json
+      - run: npm ci
+      - run: npm run build
+      - run: npm test --if-present

@@ -1,0 +1,93 @@
+# Сборка установщиков окна на трёх ОС и черновик GitHub-релиза.
+#
+# Запуск: тег `v*` (git tag v0.2.0 && git push origin v0.2.0) или вручную (workflow_dispatch).
+# Все матричные сборки складывают файлы в один черновик релиза — его публикует человек.
+#
+# Подпись: секретов нет, поэтому
+# - macOS — ad-hoc подпись (`APPLE_SIGNING_IDENTITY: "-"`), без нотаризации: при первом запуске
+#   Gatekeeper попросит «Открыть» через контекстное меню (или `xattr -dr com.apple.quarantine`);
+# - Windows — без подписи (SmartScreen покажет «неизвестный издатель»);
+# - Linux — подписи не требуется.
+# Появятся сертификаты — добавить APPLE_CERTIFICATE / APPLE_ID… и TAURI_SIGNING_* в secrets.
+#
+# Форматы задаются здесь через `--bundles`, а не в tauri.conf.json: macOS — .app + .dmg,
+# Windows — .msi + .exe (NSIS), Linux — .AppImage + .deb.
+# Sidecar CLI (`rmon`) собирает beforeBuildCommand из tauri.conf.json под цель `--target`.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS (Apple Silicon)
+            os: macos-latest
+            target: aarch64-apple-darwin
+            args: --target aarch64-apple-darwin --bundles app,dmg
+          - name: macOS (Intel)
+            os: macos-latest
+            target: x86_64-apple-darwin
+            args: --target x86_64-apple-darwin --bundles app,dmg
+          - name: Windows
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            args: --bundles msi,nsis
+          - name: Linux
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            args: --bundles appimage,deb
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # ubuntu-22.04: AppImage, собранный на старом glibc, запускается на большем числе дистрибутивов.
+      - name: Системные библиотеки Tauri (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev patchelf
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/rmon-app/package-lock.json
+
+      - name: Зависимости фронтенда
+        working-directory: apps/rmon-app
+        run: npm ci
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Ad-hoc подпись macOS (см. шапку). На других ОС переменная не используется.
+          APPLE_SIGNING_IDENTITY: "-"
+        with:
+          projectPath: apps/rmon-app
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}
+          releaseName: Resource Monitor ${{ github.ref_type == 'tag' && github.ref_name || 'v__VERSION__' }}
+          releaseBody: Сборки окна Resource Monitor для macOS, Windows и Linux. macOS — ad-hoc подпись без нотаризации, Windows — без подписи.
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}
