@@ -5,27 +5,19 @@ use std::io::Write;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
+use crate::config;
 use crate::error::{Error, Result};
 
-/// Путь журнала действий (`RMON_ACTIONS_LOG` переопределяет).
+/// Путь журнала действий — см. [`config::actions_log`].
 pub fn actions_path() -> PathBuf {
-    if let Some(p) = std::env::var_os("RMON_ACTIONS_LOG") {
-        return p.into();
-    }
-    home().join("Library/Logs/rmon/actions.jsonl")
+    config::actions_log()
 }
 
-/// Путь журнала memory-guard (`RMON_GUARD_LOG` переопределяет).
+/// Путь журнала memory-guard — см. [`config::guard_log`].
 pub fn guard_path() -> PathBuf {
-    if let Some(p) = std::env::var_os("RMON_GUARD_LOG") {
-        return p.into();
-    }
-    home().join("Programming - Main/Hooks/memory-guard/log/events.jsonl")
-}
-
-fn home() -> PathBuf {
-    std::env::var_os("HOME").map_or_else(|| PathBuf::from("/tmp"), PathBuf::from)
+    config::guard_log()
 }
 
 /// Дописать строку в журнал действий.
@@ -39,7 +31,8 @@ pub fn append_action(entry: &serde_json::Value) -> Result<()> {
 }
 
 /// Откуда запись.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export, rename = "JournalSource")]
 pub enum Source {
     /// Действия rmon.
     #[serde(rename = "rmon")]
@@ -50,15 +43,18 @@ pub enum Source {
 }
 
 /// Запись журнала для человека.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct JournalEntry {
     /// Источник.
     pub source: Source,
     /// Время, unix-секунды.
+    #[ts(type = "number | null")]
     pub ts: Option<u64>,
     /// Одна строка по-русски.
     pub text: String,
     /// Исходная запись.
+    #[ts(type = "unknown")]
     pub raw: serde_json::Value,
 }
 

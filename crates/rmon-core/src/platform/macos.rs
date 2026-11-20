@@ -189,6 +189,13 @@ impl Platform for MacOsPlatform {
         }
     }
 
+    fn cwd(&mut self, pid: i32) -> Result<Option<String>> {
+        let Some(info) = pidinfo::<libc::proc_vnodepathinfo>(pid, libc::PROC_PIDVNODEPATHINFO) else {
+            return Ok(None);
+        };
+        Ok(cstr(info.pvi_cdir.vip_path.as_flattened()))
+    }
+
     fn alive(&mut self, pid: i32) -> Result<bool> {
         // SAFETY: сигнал 0 ничего не посылает, только проверяет существование.
         if unsafe { libc::kill(pid, 0) } == 0 {

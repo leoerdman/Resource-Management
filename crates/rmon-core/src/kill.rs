@@ -3,44 +3,19 @@
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::collect::unix_now;
 use crate::error::{Error, Result};
 use crate::journal;
 use crate::model::ProcessInfo;
 use crate::platform::{self, Platform, Signal};
-
-/// Можно ли снимать процесс.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "reason", rename_all = "snake_case")]
-pub enum KillPolicy {
-    /// Никогда.
-    Protected(String),
-    /// Только с явным подтверждением.
-    Confirm(String),
-    /// Можно.
-    Free,
-}
-
-impl KillPolicy {
-    /// Слово для человека.
-    pub fn label(&self) -> &'static str {
-        match self {
-            Self::Protected(_) => "защищён",
-            Self::Confirm(_) => "с подтверждением",
-            Self::Free => "можно",
-        }
-    }
-
-    /// Показывать ли кнопку «Снять».
-    pub fn killable(&self) -> bool {
-        !matches!(self, Self::Protected(_))
-    }
-}
+pub use crate::policy::{KillPolicy, policy_for};
 
 /// Кто попросил снятие.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(export)]
 pub enum Requester {
     /// Командная строка.
     Cli,
@@ -78,7 +53,8 @@ impl Default for KillRequest {
 }
 
 /// Итог снятия.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct KillOutcome {
     /// Процесс.
     pub pid: i32,
@@ -89,100 +65,12 @@ pub struct KillOutcome {
     /// Завершился ли.
     pub exited: bool,
     /// Сколько памяти освободилось (оценка по снимку).
+    #[ts(type = "number")]
     pub reclaimed: u64,
     /// Пробный прогон.
     pub dry_run: bool,
     /// Итог для человека.
     pub message: String,
-}
-
-/// Системные службы Apple. Утилиты из `/bin` и `/usr/bin`, запущенные владельцем
-/// (`sleep`, `python3`, `git`), сюда не входят: их снимают так же, как любой прогон.
-const SYSTEM_PREFIXES: &[&str] = &["/System/", "/usr/libexec/", "/usr/sbin/", "/sbin/", "/Library/Apple/"];
-/// Ядро и графика.
-const PROTECTED_NAMES: &[&str] = &["kernel_task", "launchd", "WindowServer", "loginwindow"];
-/// Сторожа владельца.
-const PROTECTED_ARGS: &[(&str, &str)] = &[
-    ("memory-guard/guard.ts", "сам сторож памяти"),
-    ("Hooks/machine-guard/", "хуки сторожа машины"),
-];
-/// Приложения владельца (часть пути .app).
-const CONFIRM_BUNDLES: &[(&str, &str)] = &[
-    ("Claude", "Claude и его хелперы"),
-    ("M Code Desktop", "M Code Desktop"),
-    ("Telegram", "Telegram"),
-    ("Google Chrome", "браузер"),
-    ("Safari", "браузер"),
-    ("Arc", "браузер"),
-    ("Firefox", "браузер"),
-    ("Brave Browser", "браузер"),
-    ("Microsoft Edge", "браузер"),
-    ("Yandex", "браузер"),
-    ("Opera", "браузер"),
-    ("Chromium", "браузер"),
-    ("Orion", "браузер"),
-    ("Zen", "браузер"),
-    ("Dia", "браузер"),
-    ("Comet", "браузер"),
-    ("Visual Studio Code", "редактор"),
-    ("Cursor", "редактор"),
-    ("Windsurf", "редактор"),
-    ("Zed", "редактор"),
-    ("Xcode", "редактор"),
-];
-
-/// Политика для процесса. Одно место для CLI, MCP и окна.
-pub fn policy_for(p: &ProcessInfo) -> KillPolicy {
-    let me = std::process::id() as i32;
-    if p.pid <= 1 {
-        return KillPolicy::Protected("ядро и launchd".into());
-    }
-    if p.pid == me {
-        return KillPolicy::Protected("сам rmon".into());
-    }
-    if PROTECTED_NAMES.contains(&p.name.as_str()) {
-        return KillPolicy::Protected(format!("{} — часть системы", p.name));
-    }
-    if let Some(exe) = &p.exe {
-        if SYSTEM_PREFIXES.iter().any(|pre| exe.starts_with(pre)) {
-            return KillPolicy::Protected("системный процесс".into());
-        }
-        if exe.contains("/rmon-app.app/") || exe.contains("/Resource Monitor.app/") {
-            return KillPolicy::Protected("сам rmon".into());
-        }
-    }
-    if p.uid == 0 && platform::current_uid() != 0 {
-        return KillPolicy::Protected("процесс root — нет прав".into());
-    }
-    let cmd = p.args.join(" ");
-    for (needle, why) in PROTECTED_ARGS {
-        if cmd.contains(needle) {
-            return KillPolicy::Protected((*why).into());
-        }
-    }
-    if let Some(exe) = &p.exe {
-        for (bundle, why) in CONFIRM_BUNDLES {
-            if exe_in_bundle(exe, bundle) {
-                return KillPolicy::Confirm(format!("{why}: {}", p.app_group));
-            }
-        }
-    }
-    match p.name.as_str() {
-        "claude" => return KillPolicy::Confirm("сессия Claude Code".into()),
-        "mcode" | "mcode-engine" => return KillPolicy::Confirm("движок M Code".into()),
-        _ => {}
-    }
-    if cmd.contains("mcode-engine") {
-        return KillPolicy::Confirm("движок M Code".into());
-    }
-    if p.exe.as_deref().is_some_and(|e| e.contains(".app/")) {
-        return KillPolicy::Confirm(format!("приложение {}", p.app_group));
-    }
-    KillPolicy::Free
-}
-
-fn exe_in_bundle(exe: &str, bundle: &str) -> bool {
-    exe.split('/').any(|c| c.strip_suffix(".app").is_some_and(|stem| stem == bundle || stem.starts_with(&format!("{bundle} "))))
 }
 
 /// Снять процесс через защитный слой текущей платформы.
@@ -310,26 +198,15 @@ mod tests {
     }
 
     #[test]
-    fn policies() {
-        assert!(matches!(policy_for(&proc(1, "launchd", Some("/sbin/launchd"))), KillPolicy::Protected(_)));
-        assert!(matches!(policy_for(&proc(400, "WindowServer", None)), KillPolicy::Protected(_)));
-        assert!(!policy_for(&proc(400, "WindowServer", None)).killable());
-        assert!(matches!(
-            policy_for(&proc(500, "Google Chrome Helper", Some("/Applications/Google Chrome.app/Contents/Frameworks/x"))),
-            KillPolicy::Confirm(_)
-        ));
-        assert!(matches!(policy_for(&proc(600, "claude", Some("/Users/x/.local/bin/claude"))), KillPolicy::Confirm(_)));
-        assert_eq!(policy_for(&proc(700, "node", Some("/opt/homebrew/bin/node"))), KillPolicy::Free);
-    }
-
-    #[test]
     fn kills_own_sleep_and_refuses_bad_identity() {
         let mut child = std::process::Command::new("/bin/sleep").arg("300").spawn().unwrap();
         let pid = child.id() as i32;
         std::thread::sleep(Duration::from_millis(200));
         let mut plat = platform::current().unwrap();
         let info = plat.process(pid).unwrap().unwrap();
-        assert_eq!(policy_for(&info), KillPolicy::Free);
+        assert!(matches!(policy_for(&info), KillPolicy::Confirm(_)), "утилиты /bin — с подтверждением");
+        let refused = kill_with(plat.as_mut(), &info, KillRequest::default()).unwrap_err();
+        assert!(matches!(refused, Error::ConfirmationRequired { .. }), "{refused}");
         let mut fake = info.clone();
         fake.started_at += 1000;
         let err = kill_with(plat.as_mut(), &fake, KillRequest::default()).unwrap_err();
@@ -339,7 +216,7 @@ mod tests {
         assert!(kill_with(plat.as_mut(), &launchd, KillRequest::default()).is_err());
         // Пожинаем ребёнка в фоне, иначе он останется зомби и «живым» для kill(0).
         let reaper = std::thread::spawn(move || child.wait());
-        let out = kill_with(plat.as_mut(), &info, KillRequest { reason: "тест".into(), ..Default::default() }).unwrap();
+        let out = kill_with(plat.as_mut(), &info, KillRequest { reason: "тест".into(), confirm: true, ..Default::default() }).unwrap();
         assert!(out.exited, "{}", out.message);
         reaper.join().unwrap().unwrap();
     }

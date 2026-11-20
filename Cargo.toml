@@ -15,6 +15,9 @@ thiserror = "2"
 libc = "0.2"
 anyhow = "1"
 clap = { version = "4", features = ["derive", "wrap_help"] }
+regex-lite = "0.1"
+toml = "1"
+ts-rs = { version = "12", features = ["serde-json-impl"] }
 
 [profile.release]
 lto = "thin"

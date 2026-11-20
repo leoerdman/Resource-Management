@@ -5,6 +5,7 @@
 //! возвращает [`Error::UnsupportedPlatform`] во время работы.
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 #[cfg(not(target_os = "macos"))]
 use crate::error::Error;
@@ -15,12 +16,14 @@ use crate::model::{ProcessInfo, SystemMemory};
 pub mod macos;
 
 /// Сигнал снятия.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub enum Signal {
     /// SIGTERM — вежливая просьба завершиться.
+    #[serde(rename = "SIGTERM")]
     Term,
     /// SIGKILL — снятие без возможности отказаться.
+    #[serde(rename = "SIGKILL")]
     Kill,
 }
 
@@ -62,6 +65,11 @@ pub trait Platform: Send {
 
     /// Жив ли процесс (EPERM — жив, просто не наш).
     fn alive(&mut self, pid: i32) -> Result<bool>;
+
+    /// Рабочий каталог процесса; `None`, если нет прав или ОС не отдаёт.
+    fn cwd(&mut self, _pid: i32) -> Result<Option<String>> {
+        Ok(None)
+    }
 }
 
 /// Реализация платформы, на которой мы работаем.
@@ -81,14 +89,18 @@ pub fn supported() -> bool {
     cfg!(target_os = "macos")
 }
 
-/// Идентификатор владельца текущего процесса.
+/// Наибольший pid ядра и init: их не снимают никогда (launchd/systemd — 1, Windows System — 4).
+pub const LAST_KERNEL_PID: i32 = if cfg!(windows) { 4 } else { 1 };
+
+/// Идентификатор владельца текущего процесса. На Windows платформа заполняет
+/// `ProcessInfo::uid` так, чтобы свои процессы совпадали с этим значением.
 pub fn current_uid() -> u32 {
-    #[cfg(target_os = "macos")]
+    #[cfg(unix)]
     // SAFETY: geteuid не имеет аргументов и не может упасть — только читает поле ядра.
     unsafe {
         libc::geteuid()
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(unix))]
     {
         0
     }

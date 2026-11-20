@@ -62,6 +62,10 @@ pub enum Error {
         source: std::io::Error,
     },
 
+    /// Файл настроек не читается или не разбирается.
+    #[error("настройки {path}: {detail}")]
+    Config { path: PathBuf, detail: String },
+
     /// Журнал действий недоступен.
     #[error("журнал {path}: {source}")]
     Journal {

@@ -9,6 +9,7 @@
 
 pub mod analyze;
 pub mod collect;
+pub mod config;
 pub mod error;
 pub mod fmt;
 pub mod group;
@@ -16,7 +17,9 @@ pub mod history;
 pub mod journal;
 pub mod kill;
 pub mod model;
+pub mod monitor;
 pub mod platform;
+pub mod policy;
 
 pub use error::{Error, Result};
 pub use model::{

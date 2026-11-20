@@ -3,15 +3,17 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::fmt;
 use crate::history::{History, slope_per_min};
 use crate::kill::{KillPolicy, policy_for};
-use crate::model::{AppGroup, GIB, MIB, ProcState, Snapshot};
+use crate::model::{AppGroup, GIB, MIB, ProcState, ProcessInfo, Snapshot};
 
 /// Почему процесс подозрителен.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
+#[ts(export)]
 pub enum SuspectKind {
     /// Большой.
     Hog,
@@ -28,7 +30,8 @@ pub enum SuspectKind {
 }
 
 /// Подозреваемый.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct Suspect {
     /// Процесс.
     pub pid: i32,
@@ -36,7 +39,12 @@ pub struct Suspect {
     pub name: String,
     /// Приложение.
     pub app_group: String,
+    /// Строка запуска, укороченная до [`CMD_LIMIT`] символов: «node 3882» человеку ничего не говорит.
+    pub cmd: String,
+    /// Ключ группы для подозреваемых одной природы (копии одной команды) — окно сворачивает их в одну карточку.
+    pub group: Option<String>,
     /// Время запуска (личность для снятия).
+    #[ts(type = "number")]
     pub started_at: u64,
     /// Вид.
     pub kind: SuspectKind,
@@ -45,13 +53,30 @@ pub struct Suspect {
     /// Человеку, по-русски.
     pub reason: String,
     /// Сколько освободится.
+    #[ts(type = "number")]
     pub reclaim: u64,
     /// Политика снятия.
     pub policy: KillPolicy,
 }
 
-/// Пороги анализа.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Длина строки запуска в [`Suspect::cmd`].
+pub const CMD_LIMIT: usize = 200;
+
+/// Строка запуска, укороченная по символам.
+pub fn short_cmd(p: &ProcessInfo) -> String {
+    let full = p.command_line();
+    if full.chars().count() <= CMD_LIMIT {
+        full
+    } else {
+        let mut s: String = full.chars().take(CMD_LIMIT - 1).collect();
+        s.push('…');
+        s
+    }
+}
+
+/// Пороги анализа (секция `[thresholds]` в `config.toml`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct Thresholds {
     /// Hog: абсолютный порог.
     pub hog_bytes: u64,
@@ -126,11 +151,13 @@ pub fn analyze(history: &History, th: &Thresholds) -> Vec<Suspect> {
         }
     }
 
-    // Дубли по строке запуска.
-    let mut dup: HashMap<String, Vec<i32>> = HashMap::new();
+    // Дубли: одинаковые dev-команды. Копия лишняя, если служит тому же, кому и другая
+    // (тот же родитель) или никому (сирота). Копии с разными живыми родителями — это
+    // каждая своя сессия (MCP-сервер на каждую сессию claude) и дублем не считаются.
+    let mut dup: HashMap<String, Vec<&ProcessInfo>> = HashMap::new();
     for p in &last.processes {
         if !p.args.is_empty() && is_dev(&p.name) {
-            dup.entry(p.command_line()).or_default().push(p.pid);
+            dup.entry(p.command_line()).or_default().push(p);
         }
     }
 
@@ -147,6 +174,8 @@ pub fn analyze(history: &History, th: &Thresholds) -> Vec<Suspect> {
             pid: p.pid,
             name: p.name.clone(),
             app_group: p.app_group.clone(),
+            cmd: short_cmd(p),
+            group: None,
             started_at: p.started_at,
             kind,
             score,
@@ -205,24 +234,44 @@ pub fn analyze(history: &History, th: &Thresholds) -> Vec<Suspect> {
         }
     }
 
-    for (cmd, pids) in &dup {
-        if pids.len() < th.duplicate_count {
+    for (cmd, copies) in &dup {
+        if copies.len() < th.duplicate_count {
             continue;
         }
-        // Старшие копии — подозреваемые; самую новую оставляем.
-        let mut procs: Vec<_> = pids.iter().filter_map(|&pid| last.process(pid)).collect();
-        procs.sort_by_key(|p| p.started_at);
-        let n = procs.len();
-        for p in procs.iter().take(n - 1) {
-            let short: String = cmd.chars().take(60).collect();
+        let mut by_parent: HashMap<i32, Vec<&ProcessInfo>> = HashMap::new();
+        for p in copies {
+            by_parent.entry(p.ppid).or_default().push(p);
+        }
+        // В каждой семье оставляем самую новую копию; у сирот (ppid 1) — ни одной.
+        let mut extra: Vec<&ProcessInfo> = Vec::new();
+        for (ppid, mut family) in by_parent {
+            family.sort_by_key(|p| p.started_at);
+            let keep = usize::from(ppid > 1);
+            extra.extend(family.iter().take(family.len().saturating_sub(keep)));
+        }
+        if extra.len() < 2 {
+            continue;
+        }
+        let total: u64 = extra.iter().map(|p| p.reclaim()).sum();
+        let short: String = cmd.chars().take(60).collect();
+        let group = format!("dup:{short}");
+        for p in extra.iter().copied() {
             put(Suspect {
                 pid: p.pid,
                 name: p.name.clone(),
                 app_group: p.app_group.clone(),
+                cmd: short_cmd(p),
+                group: Some(group.clone()),
                 started_at: p.started_at,
                 kind: SuspectKind::Duplicate,
-                score: (35 + (n.min(10) * 3) as u8).min(80),
-                reason: format!("{} одинаковых «{}», этот — {}", n, short, fmt::bytes(p.reclaim())),
+                score: (30.0 + 40.0 * (total as f64 / (4.0 * GIB as f64)).min(1.0)) as u8,
+                reason: format!(
+                    "{} лишних копий «{short}» из {} (вместе {}), эта — {}",
+                    extra.len(),
+                    copies.len(),
+                    fmt::bytes(total),
+                    fmt::bytes(p.reclaim())
+                ),
                 reclaim: p.reclaim(),
                 policy: policy_for(p),
             });
@@ -297,9 +346,23 @@ mod tests {
         assert_eq!(kind(11), Some(SuspectKind::Growing));
         assert_eq!(kind(12), Some(SuspectKind::Orphan));
         assert_eq!(kind(13), Some(SuspectKind::Duplicate));
+        assert_eq!(kind(14), Some(SuspectKind::Duplicate));
         assert_eq!(kind(15), None, "самую новую копию оставляем");
+        assert_eq!(s.iter().find(|x| x.pid == 13).unwrap().group, s.iter().find(|x| x.pid == 14).unwrap().group);
         assert!(s[0].score >= s[s.len() - 1].score);
         assert!(s.iter().find(|x| x.pid == 11).unwrap().reason.contains("растёт"));
+    }
+
+    #[test]
+    fn sessions_with_own_parents_are_not_duplicates() {
+        let mut h = History::default();
+        // Три MCP-сервера, у каждого своя живая сессия claude — это не дубли.
+        h.push(snap(1, vec![
+            p(20, "node", 80 * MIB, 101, &["node", "mcp.js"]),
+            p(21, "node", 80 * MIB, 102, &["node", "mcp.js"]),
+            p(22, "node", 80 * MIB, 103, &["node", "mcp.js"]),
+        ]));
+        assert!(analyze(&h, &Thresholds::default()).iter().all(|x| x.kind != SuspectKind::Duplicate));
     }
 
     #[test]

@@ -1,0 +1,4 @@
+# TS-типы окна генерируются из Rust (ts-rs) — один источник правды контракта.
+# `cargo test` пишет их в apps/rmon-app/src/bindings; CI проверяет, что они закоммичены.
+[env]
+TS_RS_EXPORT_DIR = { value = "apps/rmon-app/src/bindings", relative = true }

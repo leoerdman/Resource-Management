@@ -1,6 +1,7 @@
 //! Модель данных — контракт для CLI, MCP-сервера и окна (docs/SPEC.md).
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 /// Кибибайт.
 pub const KIB: u64 = 1024;
@@ -10,7 +11,8 @@ pub const MIB: u64 = 1024 * KIB;
 pub const GIB: u64 = 1024 * MIB;
 
 /// Давление памяти из `kern.memorystatus_vm_pressure_level` (1 / 2 / 4).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub enum Pressure {
     /// Зелёная зона.
@@ -45,7 +47,8 @@ impl Pressure {
 }
 
 /// Состояние процесса (`pbi_status`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
 #[serde(rename_all = "snake_case")]
 pub enum ProcState {
     /// SRUN.
@@ -75,42 +78,59 @@ impl ProcState {
 }
 
 /// Накопительные счётчики ядра — разница между снимками показывает активность.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct VmCounters {
     /// Страниц подкачано с диска.
+    #[ts(type = "number")]
     pub pageins: u64,
     /// Страниц вытеснено на диск.
+    #[ts(type = "number")]
     pub pageouts: u64,
     /// Страниц поднято из свопа.
+    #[ts(type = "number")]
     pub swapins: u64,
     /// Страниц отправлено в своп.
+    #[ts(type = "number")]
     pub swapouts: u64,
     /// Сжатий страниц.
+    #[ts(type = "number")]
     pub compressions: u64,
     /// Распаковок страниц.
+    #[ts(type = "number")]
     pub decompressions: u64,
 }
 
 /// Память системы целиком. `used = app + wired + compressed`, как «Memory Used» в Activity Monitor.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct SystemMemory {
     /// `hw.memsize`.
+    #[ts(type = "number")]
     pub total: u64,
     /// Занято: `app + wired + compressed`.
+    #[ts(type = "number")]
     pub used: u64,
     /// Память приложений: `(internal - purgeable) * page`.
+    #[ts(type = "number")]
     pub app: u64,
     /// Wired: не выгружается.
+    #[ts(type = "number")]
     pub wired: u64,
     /// Сжато компрессором: `compressor_page_count * page`.
+    #[ts(type = "number")]
     pub compressed: u64,
     /// Кэш файлов: `(external + purgeable) * page`.
+    #[ts(type = "number")]
     pub cached_files: u64,
     /// Свободно: `free_count * page`.
+    #[ts(type = "number")]
     pub free: u64,
     /// `vm.swapusage` total.
+    #[ts(type = "number")]
     pub swap_total: u64,
     /// `vm.swapusage` used.
+    #[ts(type = "number")]
     pub swap_used: u64,
     /// Давление памяти.
     pub pressure: Pressure,
@@ -140,7 +160,8 @@ impl SystemMemory {
 ///
 /// `(pid, started_at)` — личность процесса: pid переиспользуется, дата запуска — нет.
 /// `args` — вторая половина личности: `exec` на месте может оказаться с другими аргументами.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct ProcessInfo {
     /// Идентификатор процесса.
     pub pid: i32,
@@ -155,8 +176,10 @@ pub struct ProcessInfo {
     /// Владелец процесса.
     pub uid: u32,
     /// `ri_phys_footprint` — «Память» в Activity Monitor; `None`, если нет прав.
+    #[ts(type = "number | null")]
     pub footprint: Option<u64>,
     /// `ri_resident_size` — резидентая память.
+    #[ts(type = "number")]
     pub rss: u64,
     /// Загрузка CPU по разнице двух снимков; в первом снимке 0.
     pub cpu_pct: f32,
@@ -165,6 +188,7 @@ pub struct ProcessInfo {
     /// Состояние.
     pub state: ProcState,
     /// Время запуска, unix-секунды.
+    #[ts(type = "number")]
     pub started_at: u64,
     /// Имя приложения-владельца: «Google Chrome», «M Code Desktop», иначе имя процесса.
     pub app_group: String,
@@ -195,9 +219,11 @@ impl ProcessInfo {
 }
 
 /// Снимок системы и процессов в один момент.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct Snapshot {
     /// Время снимка, unix-секунды.
+    #[ts(type = "number")]
     pub taken_at: u64,
     /// Память системы.
     pub system: SystemMemory,
@@ -211,6 +237,47 @@ impl Snapshot {
         self.processes.iter().find(|p| p.pid == pid)
     }
 
+    /// Цепочка родителей от непосредственного до init (без самого процесса).
+    pub fn ancestors(&self, pid: i32) -> Vec<&ProcessInfo> {
+        let mut out = Vec::new();
+        let mut cur = self.process(pid).map(|p| p.ppid);
+        while let Some(ppid) = cur {
+            if ppid <= 0 || out.iter().any(|p: &&ProcessInfo| p.pid == ppid) {
+                break;
+            }
+            match self.process(ppid) {
+                Some(parent) => {
+                    out.push(parent);
+                    cur = (parent.pid != parent.ppid).then_some(parent.ppid);
+                }
+                None => break,
+            }
+        }
+        out
+    }
+
+    /// Все потомки процесса (дети, внуки…) в порядке обхода в ширину.
+    pub fn descendants(&self, pid: i32) -> Vec<&ProcessInfo> {
+        let mut by_parent: std::collections::HashMap<i32, Vec<&ProcessInfo>> = std::collections::HashMap::new();
+        for p in &self.processes {
+            if p.pid != p.ppid {
+                by_parent.entry(p.ppid).or_default().push(p);
+            }
+        }
+        let mut out = Vec::new();
+        let mut queue = std::collections::VecDeque::from([pid]);
+        let mut seen = std::collections::HashSet::from([pid]);
+        while let Some(cur) = queue.pop_front() {
+            for child in by_parent.get(&cur).into_iter().flatten() {
+                if seen.insert(child.pid) {
+                    out.push(*child);
+                    queue.push_back(child.pid);
+                }
+            }
+        }
+        out
+    }
+
     /// Память, которую вернут снятые процессы из списка.
     pub fn reclaimed(&self, pids: &[i32]) -> u64 {
         self.processes
@@ -222,13 +289,15 @@ impl Snapshot {
 }
 
 /// Приложение целиком: все его процессы одной суммой.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
+#[ts(export)]
 pub struct AppGroup {
     /// Имя приложения.
     pub name: String,
     /// Процессы приложения.
     pub pids: Vec<i32>,
     /// Суммарный footprint (иначе rss).
+    #[ts(type = "number")]
     pub footprint: u64,
     /// Сколько процессов.
     pub count: usize,

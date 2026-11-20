@@ -58,6 +58,11 @@ impl Collector {
         self.platform.process(pid)
     }
 
+    /// Рабочий каталог процесса.
+    pub fn cwd(&mut self, pid: i32) -> Result<Option<String>> {
+        self.platform.cwd(pid)
+    }
+
     /// Доступ к платформе (снятие процессов).
     pub fn platform_mut(&mut self) -> &mut dyn Platform {
         self.platform.as_mut()
