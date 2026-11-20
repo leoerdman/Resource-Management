@@ -3,6 +3,8 @@
 #   /Applications/Resource Monitor.app  (окно + значок в строке меню + CLI внутри)
 #   ~/.local/bin/rmon → CLI из бандла (для терминала и `claude mcp add`)
 # Повторный запуск обновляет установку. Подпись — ad-hoc (без Developer ID).
+#   scripts/install-macos.sh         — собрать и поставить .app
+#   scripts/install-macos.sh --dmg   — ещё и установщик .dmg для раздачи (target/release/bundle/dmg)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -12,7 +14,9 @@ DEST="/Applications/$APP_NAME.app"
 BIN_DIR="${RMON_BIN_DIR:-$HOME/.local/bin}"
 
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}"
-( cd apps/rmon-app && npm ci --no-audit --no-fund && npx tauri build --bundles app,dmg )
+BUNDLES=app
+[ "${1:-}" = "--dmg" ] && BUNDLES=app,dmg
+( cd apps/rmon-app && npm ci --no-audit --no-fund && npx tauri build --bundles "$BUNDLES" )
 
 codesign --force --deep --sign - "$BUNDLE"
 
