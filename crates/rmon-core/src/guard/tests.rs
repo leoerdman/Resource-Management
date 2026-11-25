@@ -156,24 +156,90 @@ fn zone_safety_nets() {
 #[test]
 fn hysteresis_needs_sustained_red() {
     let mut h = Hysteresis::default();
-    assert!(!h.feed(Zone::Red, 0, 12_000));
-    assert!(!h.feed(Zone::Red, 9_000, 12_000));
-    assert!(h.feed(Zone::Red, 12_000, 12_000));
+    assert!(!h.feed(Zone::Red, 0, 12_000, 30_000));
+    assert!(!h.feed(Zone::Red, 9_000, 12_000, 30_000));
+    assert!(h.feed(Zone::Red, 12_000, 12_000, 30_000));
+
+    // Провал 0 с — старое «подряд»: один не-красный опрос сбрасывает отсчёт.
+    let mut h = Hysteresis::default();
+    h.feed(Zone::Red, 0, 12_000, 0);
+    h.feed(Zone::Red, 9_000, 12_000, 0);
+    assert!(!h.feed(Zone::Yellow, 10_000, 12_000, 0));
+    assert_eq!(h.red_for_ms(), 0);
+    assert!(!h.feed(Zone::Red, 11_000, 12_000, 0));
+    assert!(!h.feed(Zone::Red, 20_000, 12_000, 0));
+    assert!(h.feed(Zone::Red, 23_000, 12_000, 0), "1 + 9 + 3 = 13 с");
 
     let mut h = Hysteresis::default();
-    h.feed(Zone::Red, 0, 12_000);
-    h.feed(Zone::Red, 9_000, 12_000);
-    assert!(!h.feed(Zone::Yellow, 10_000, 12_000), "один не-красный опрос сбрасывает отсчёт");
-    assert!(!h.feed(Zone::Red, 11_000, 12_000));
-    assert!(!h.feed(Zone::Red, 20_000, 12_000));
-    assert!(h.feed(Zone::Red, 23_000, 12_000));
-
-    let mut h = Hysteresis::default();
-    h.feed(Zone::Red, 0, 6_000);
-    assert!(h.feed(Zone::Red, 6_000, 6_000));
+    h.feed(Zone::Red, 0, 6_000, 30_000);
+    assert!(h.feed(Zone::Red, 6_000, 6_000, 30_000));
     h.reset();
-    assert!(!h.feed(Zone::Red, 7_000, 6_000), "после снятия — снова ждать");
-    assert!(h.feed(Zone::Red, 13_000, 6_000));
+    assert!(!h.feed(Zone::Red, 7_000, 6_000, 30_000), "после снятия — снова ждать");
+    assert!(h.feed(Zone::Red, 13_000, 6_000, 30_000));
+}
+
+#[test]
+fn short_dips_do_not_reset_red_long_calm_does() {
+    let mut h = Hysteresis::default();
+    h.feed(Zone::Red, 0, 10_000, 15_000);
+    h.feed(Zone::Red, 4_000, 10_000, 15_000);
+    assert!(!h.feed(Zone::Yellow, 6_000, 10_000, 15_000), "жёлтое не действует");
+    assert_eq!(h.red_for_ms(), 4_000, "провал не копит и не сбрасывает");
+    h.feed(Zone::Green, 14_000, 10_000, 15_000);
+    assert!(!h.feed(Zone::Red, 16_000, 10_000, 15_000), "провал 10 с < 15 с: набранное цело, но этот шаг — 2 с");
+    assert!(h.feed(Zone::Red, 20_000, 10_000, 15_000), "4 + 2 + 4 = 10 с красного");
+
+    let mut h = Hysteresis::default();
+    h.feed(Zone::Red, 0, 10_000, 15_000);
+    h.feed(Zone::Red, 8_000, 10_000, 15_000);
+    h.feed(Zone::Yellow, 9_000, 10_000, 15_000);
+    h.feed(Zone::Yellow, 24_000, 10_000, 15_000);
+    assert_eq!(h.red_for_ms(), 0, "провал 15 с — эпизод кончился");
+
+    // Долгий пропуск опросов (сон) в красное не засчитывается.
+    let mut h = Hysteresis::default();
+    h.feed(Zone::Red, 0, 10_000, 15_000);
+    assert!(!h.feed(Zone::Red, 60_000, 10_000, 15_000));
+}
+
+/// Настоящий эпизод 24.11.2026 20:45:49 (журнал guard.jsonl): давление мигает «красное ↔ жёлтое»,
+/// опрос раз в 2 с, «держится» 5 с. Старое «подряд» сняло прогон только на 43-й секунде (и так
+/// весь вечер, пока не упёрлось в предел); новое — уже на втором красном всплеске.
+#[test]
+fn flapping_pressure_is_caught_early() {
+    // (секунда, зона) — смены зон из журнала; между ними зона держится.
+    let changes = [
+        (0, Zone::Red),
+        (2, Zone::Yellow),
+        (12, Zone::Red),
+        (18, Zone::Yellow),
+        (22, Zone::Green),
+        (24, Zone::Yellow),
+        (36, Zone::Red),
+    ];
+    let zone_at = |t: u64| changes.iter().rev().find(|(s, _)| *s <= t).map_or(Zone::Yellow, |(_, z)| *z);
+    let first_act = |gap: u64| -> Option<u64> {
+        let mut h = Hysteresis::default();
+        h.feed(Zone::Yellow, 0, 5_000, gap * 1000);
+        (2..60).step_by(2).find(|&t| h.feed(zone_at(t - 2), t * 1000, 5_000, gap * 1000)).map(|t| t - 2)
+    };
+    assert_eq!(first_act(30), Some(14), "новое — на втором всплеске");
+}
+
+#[test]
+fn tsgolint_run_is_a_victim_editor_helper_is_not() {
+    let oxlint = "/Users/u/MCode/node_modules/.bun/oxlint-darwin-arm64/oxlint";
+    let tsgolint = "/Users/u/MCode/node_modules/.bun/@oxlint-tsgolint+darwin-arm64@0.21.0/node_modules/@oxlint-tsgolint/darwin-arm64/tsgolint";
+    let procs = vec![
+        p(100, 1, "/bin/zsh", "zsh", 3),
+        p(101, 100, oxlint, "oxlint --type-aware", 200),
+        p(102, 101, tsgolint, "tsgolint headless", 4000),
+        p(200, 1, "/Applications/Zed.app/Contents/MacOS/zed", "zed", 900),
+        p(201, 200, tsgolint, "tsgolint headless", 3000),
+    ];
+    let (c, rejected) = rank(procs, &GuardConfig::default());
+    assert_eq!(c.iter().map(|c| (c.pid, c.kind.as_str())).collect::<Vec<_>>(), [(102, "tsgolint")]);
+    assert!(rejected.iter().find(|r| r.pid == 201).unwrap().why.contains("родитель zed"));
 }
 
 #[test]
@@ -286,8 +352,13 @@ fn no_victim_is_said_once_per_red_episode() {
     let mut g = Guard::default();
     assert!(matches!(g.observe_with(&cfg, &rules, &red, 60000, 0, free).decision, Decision::NoVictim { .. }));
     assert_eq!(g.observe_with(&cfg, &rules, &red, 60000, 1_000, free).decision, Decision::Wait);
+    // Короткий провал — тот же эпизод: не повторять.
     g.observe_with(&cfg, &rules, &green, 60000, 2_000, free);
-    assert!(matches!(g.observe_with(&cfg, &rules, &red, 60000, 3_000, free).decision, Decision::NoVictim { .. }));
+    assert_eq!(g.observe_with(&cfg, &rules, &red, 60000, 3_000, free).decision, Decision::Wait);
+    // Провал дольше `red_gap_secs` — новый эпизод: сказать снова.
+    g.observe_with(&cfg, &rules, &green, 60000, 4_000, free);
+    g.observe_with(&cfg, &rules, &green, 60000, 40_000, free);
+    assert!(matches!(g.observe_with(&cfg, &rules, &red, 60000, 41_000, free).decision, Decision::NoVictim { .. }));
 }
 
 #[test]

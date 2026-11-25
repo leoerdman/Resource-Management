@@ -24,6 +24,7 @@ type GuardApi = Pick<
 
 const ALLOW: AllowRule[] = [
   { name: "tsgo", exe: "^tsgo$" },
+  { name: "tsgolint", exe: "^tsgolint$", parent_not: "\\.app/Contents/" },
   { name: "tsc", exe: "^node$", args: "/typescript/bin/tsc|\\btsc\\b", args_not: "--watch" },
   { name: "vitest", exe: "^node$", args: "vitest", args_not: "--watch|\\bwatch\\b" },
   { name: "jest", exe: "^node$", args: "jest" },
@@ -83,6 +84,7 @@ export function createMockGuard(getDash: () => Dashboard): GuardApi & { tick(d: 
       notify: true,
       notify_dry_run: false,
       sustain_secs: 20,
+      red_gap_secs: 30,
       after_kill_secs: 60,
       term_grace_secs: 5,
       min_victim_mb: 800,
@@ -190,6 +192,8 @@ export function createMockGuard(getDash: () => Dashboard): GuardApi & { tick(d: 
       zone,
       zone_why: zoneWhy,
       red_for_secs: redSince != null ? now - redSince : 0,
+      pause_secs: 0,
+      limited: null,
       orphans: { watched: 7, mem: 410 * MB, next_in_secs: 135 },
       config: { ...g, allow: ALLOW, never: NEVER },
       config_file: settings.config_file,

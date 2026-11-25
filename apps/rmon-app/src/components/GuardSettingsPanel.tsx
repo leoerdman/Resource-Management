@@ -74,17 +74,25 @@ export function GuardSettingsPanel({ cfg, configFile, saving, onOpenConfig, onTo
         </div>
         <div className="fields">
           <NumField
-            label="Красное держится"
+            label="Красного набралось"
             unit="с"
             value={cfg.sustain_secs}
             onCommit={(v) => apply({ sustain_secs: v })}
             hint="короткие всплески не в счёт"
           />
+          <NumField
+            label="Провал не сбрасывает"
+            unit="с"
+            value={cfg.red_gap_secs}
+            onCommit={(v) => apply({ red_gap_secs: v })}
+            hint="давление мигает «красное ↔ жёлтое»; 0 — строго подряд"
+          />
         </div>
         <p className="dim small gset-sum">
           Сейчас: давление {LEVEL_LABEL[red.pressure_level] ?? red.pressure_level} и выше, или своп от {fmtBytes(red.swap_red_mb * MB)}
           {red.swap_red_from_level > 1 ? ` (если давление ${LEVEL_LABEL[red.swap_red_from_level]} и выше)` : " (при любом давлении)"}, или доступно ≤{" "}
-          {red.min_available_pct} % — и так {fmtSecs(cfg.sustain_secs)} подряд.
+          {red.min_available_pct} % — и так набралось {fmtSecs(cfg.sustain_secs)}
+          {cfg.red_gap_secs > 0 ? `; провалы короче ${fmtSecs(cfg.red_gap_secs)} отсчёт не сбрасывают` : " подряд"}.
         </p>
       </section>
 

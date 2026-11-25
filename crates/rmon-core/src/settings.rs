@@ -40,9 +40,12 @@ pub struct GuardSettings {
     pub notify: bool,
     /// Уведомлять в пробе.
     pub notify_dry_run: bool,
-    /// Красное должно держаться, с.
+    /// Красного должно набраться, с.
     #[ts(type = "number")]
     pub sustain_secs: u64,
+    /// Провал короче этого (с) набранное красное не сбрасывает.
+    #[ts(type = "number")]
+    pub red_gap_secs: u64,
     /// Пауза после снятия, с.
     #[ts(type = "number")]
     pub after_kill_secs: u64,
@@ -110,6 +113,7 @@ impl Settings {
                 notify: g.notify,
                 notify_dry_run: g.notify_dry_run,
                 sustain_secs: g.sustain_secs,
+                red_gap_secs: g.red_gap_secs,
                 after_kill_secs: g.after_kill_secs,
                 term_grace_secs: g.term_grace_secs,
                 min_victim_mb: g.min_victim_mb,
@@ -151,6 +155,7 @@ impl Settings {
         g.notify = s.notify;
         g.notify_dry_run = s.notify_dry_run;
         g.sustain_secs = s.sustain_secs;
+        g.red_gap_secs = s.red_gap_secs;
         g.after_kill_secs = s.after_kill_secs;
         g.term_grace_secs = s.term_grace_secs;
         g.min_victim_mb = s.min_victim_mb;
@@ -170,8 +175,9 @@ impl Settings {
     /// Проверка значений: человеку — понятная причина отказа.
     pub fn validate(&self) -> Result<(), String> {
         let g = &self.guard;
-        let checks: [(bool, &str); 10] = [
+        let checks: [(bool, &str); 11] = [
             (g.sustain_secs <= 600, "красное должно держаться не дольше 10 минут"),
+            (g.red_gap_secs <= 600, "провал, не сбрасывающий красное, — не дольше 10 минут"),
             (g.after_kill_secs <= 3600, "пауза после снятия — не больше часа"),
             (g.term_grace_secs <= 120, "ожидание после SIGTERM — не больше 2 минут"),
             (g.min_victim_mb >= 100, "жертва меньше 100 МБ машину не спасёт — порог от 100 МБ"),
@@ -248,6 +254,7 @@ pub fn save_to(path: &std::path::Path, settings: &Settings) -> Result<Config, St
         notify: bool,
         notify_dry_run: bool,
         sustain_secs: u64,
+        red_gap_secs: u64,
         after_kill_secs: u64,
         term_grace_secs: u64,
         min_victim_mb: u64,
@@ -265,6 +272,7 @@ pub fn save_to(path: &std::path::Path, settings: &Settings) -> Result<Config, St
             notify: g.notify,
             notify_dry_run: g.notify_dry_run,
             sustain_secs: g.sustain_secs,
+            red_gap_secs: g.red_gap_secs,
             after_kill_secs: g.after_kill_secs,
             term_grace_secs: g.term_grace_secs,
             min_victim_mb: g.min_victim_mb,

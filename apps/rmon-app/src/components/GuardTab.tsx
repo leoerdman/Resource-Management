@@ -121,15 +121,32 @@ export function GuardTab({ onToast }: Props) {
                 <span className="dim">Зона не отслеживается</span>
               )}
             </div>
-            {status.zone === "red" && (
-              <div className="red-bar" title="Сторож снимает, только если красное держится достаточно долго">
+            {status.limited ? (
+              <div className="red-bar" title="Защита от каскада: снятия прекратятся, пока окно предела не освободится">
                 <span>
-                  Красное держится <b>{status.red_for_secs} с</b> из {cfg.sustain_secs}
-                </span>
-                <span className="meter">
-                  <span style={{ width: `${Math.min(100, (status.red_for_secs / Math.max(1, cfg.sustain_secs)) * 100)}%` }} />
+                  Упёрся в предел: <b>{status.limited}</b> — не снимает
                 </span>
               </div>
+            ) : status.pause_secs > 0 ? (
+              <div className="red-bar" title="После снятия сторож даёт памяти освободиться">
+                <span>
+                  Пауза после снятия — ещё <b>{status.pause_secs} с</b>
+                </span>
+              </div>
+            ) : (
+              (status.zone === "red" || status.red_for_secs > 0) && (
+                <div
+                  className="red-bar"
+                  title={`Сторож снимает, когда красного наберётся достаточно; провалы короче ${cfg.red_gap_secs} с отсчёт не сбрасывают`}
+                >
+                  <span>
+                    Красного набралось <b>{status.red_for_secs} с</b> из {cfg.sustain_secs}
+                  </span>
+                  <span className="meter">
+                    <span style={{ width: `${Math.min(100, (status.red_for_secs / Math.max(1, cfg.sustain_secs)) * 100)}%` }} />
+                  </span>
+                </div>
+              )
             )}
           </div>
           <div className="guard-switches">

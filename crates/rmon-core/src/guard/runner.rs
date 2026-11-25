@@ -238,9 +238,14 @@ pub struct GuardStatus {
     pub zone: Option<Zone>,
     /// Почему.
     pub zone_why: String,
-    /// Сколько уже красное.
+    /// Сколько красного набралось (провалы короче `red_gap_secs` не сбрасывают).
     #[ts(type = "number")]
     pub red_for_secs: u64,
+    /// Пауза после снятия: ещё столько секунд сторож не снимает (0 — паузы нет).
+    #[ts(type = "number")]
+    pub pause_secs: u64,
+    /// Упёрся в предел снятий — какой (снимать не будет, пока окно не освободится).
+    pub limited: Option<String>,
     /// Сироты под наблюдением автоочистки.
     pub orphans: OrphanStatus,
     /// Действующие настройки.
@@ -271,6 +276,10 @@ pub fn read_events(limit: usize) -> Vec<GuardEvent> {
         text.lines().rev().filter_map(|l| serde_json::from_str(l).ok()).take(limit).collect();
     out.shrink_to_fit();
     out
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64)
 }
 
 fn now_secs() -> u64 {
@@ -463,13 +472,15 @@ impl Runner {
         (self.listener)(&ev);
     }
 
-    fn publish(&self, zone_why: String, red_for_secs: u64) {
+    fn publish(&self, zone_why: String, now_ms: u64) {
         let mut st = self.state.lock().unwrap_or_else(|e| e.into_inner());
         st.status = GuardStatus {
             mode: self.mode.clone(),
             zone: self.guard.zone(),
             zone_why,
-            red_for_secs,
+            red_for_secs: self.guard.red_for_secs(),
+            pause_secs: self.guard.pause_secs(now_ms),
+            limited: self.guard.limited(&self.cfg.guard, now_ms),
             orphans: self.orphans.status(),
             config: self.cfg.guard.clone(),
             config_file: config::config_file().display().to_string(),
@@ -488,7 +499,7 @@ impl Runner {
             self.mode = mode.clone();
             self.emit(EventKind::Mode { mode: mode.clone() }, None, None);
         }
-        let now_ms = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis() as u64);
+        let now_ms = now_ms();
         let pressure = PressureFields {
             level: pressure_level(snap.system.pressure),
             available_pct: snap.system.available_pct,
@@ -509,7 +520,7 @@ impl Runner {
                         title: "Сторож памяти".into(),
                         subtitle: "Упёрся в предел снятий".into(),
                         body: format!(
-                            "{why}. Прогоны перезапускаются быстрее, чем их снимают — кто их запускает, видно во вкладке «Сторож»; предел — в «Настройках»."
+                            "{why}. Прогоны перезапускаются быстрее, чем их снимают — кто их запускает, видно во вкладке «Сторож»; пределы — там же, в «Предохранителях»."
                         ),
                     });
                     self.emit(EventKind::Limit { why }, Some(pressure.clone()), notice)
@@ -527,7 +538,7 @@ impl Runner {
         } else {
             self.orphans.clear();
         }
-        self.publish(obs.zone_why, self.guard.red_for_secs(now_ms));
+        self.publish(obs.zone_why, now_ms);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -667,11 +678,8 @@ impl Runner {
                         self.mode = mode.clone();
                         self.emit(EventKind::Mode { mode }, None, None);
                     }
-                    let (why, red) = {
-                        let st = self.state.lock().unwrap_or_else(|e| e.into_inner());
-                        (st.status.zone_why.clone(), st.status.red_for_secs)
-                    };
-                    self.publish(why, red);
+                    let why = self.state.lock().unwrap_or_else(|e| e.into_inner()).status.zone_why.clone();
+                    self.publish(why, now_ms());
                     let _ = ack.send(());
                 }
             }
@@ -693,6 +701,8 @@ pub fn spawn(on_event: impl Fn(&GuardEvent) + Send + Sync + 'static) -> crate::R
             zone: None,
             zone_why: String::new(),
             red_for_secs: 0,
+            pause_secs: 0,
+            limited: None,
             orphans: OrphanStatus::default(),
             config: cfg.guard.clone(),
             config_file: config::config_file().display().to_string(),

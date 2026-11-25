@@ -452,12 +452,13 @@ fn guard_cmd(json: bool, action: GuardCmd, paint: Paint) -> Result<()> {
     };
     println!("Сторож памяти: {}", paint.bold(mode));
     println!(
-        "  красная зона: давление ≥ {}, или доступно ≤ {} %, или давление ≥ {} и своп ≥ {}; держится {} с",
+        "  красная зона: давление ≥ {}, или доступно ≤ {} %, или давление ≥ {} и своп ≥ {}; набралось {} с (провалы до {} с не сбрасывают)",
         g.red.pressure_level,
         g.red.min_available_pct,
         g.red.swap_red_from_level,
         bytes(g.red.swap_red_mb * 1024 * 1024),
-        g.sustain_secs
+        g.sustain_secs,
+        g.red_gap_secs
     );
     println!(
         "  жертва ≥ {}, пауза после снятия {} с, уведомления: {}",

@@ -2,7 +2,9 @@
 //!
 //! 1. **Зона** по настоящему давлению памяти, а не по проценту ОЗУ: красная — давление
 //!    критическое, или доступно ≤ `min_available_pct`, или давление жёлтое и своп ≥ `swap_red_mb`.
-//! 2. **Гистерезис:** действует, только если красное держится `sustain_secs` подряд.
+//! 2. **Гистерезис:** действует, когда красного набралось `sustain_secs`. Провалы в жёлтое
+//!    короче `red_gap_secs` отсчёт не сбрасывают: под своп-штормом давление ядра мигает
+//!    «красное ↔ жёлтое» каждые несколько секунд, и строгое «подряд» почти не набиралось.
 //! 3. **Жертва** — самый большой по footprint процесс из `allow` (tsgo, tsc, vitest, jest,
 //!    node и bun прогонов), не из `never`, не сервер/watch, не меньше `min_victim_mb`, и
 //!    со свободной политикой снятия rmon.
@@ -104,9 +106,12 @@ pub struct GuardConfig {
     pub notify: bool,
     /// Уведомлять и в пробе.
     pub notify_dry_run: bool,
-    /// Сколько секунд красное должно держаться.
+    /// Сколько секунд красного должно набраться.
     #[ts(type = "number")]
     pub sustain_secs: u64,
+    /// Провал в не-красное короче этого (с) не сбрасывает набранное красное.
+    #[ts(type = "number")]
+    pub red_gap_secs: u64,
     /// Пауза после снятия.
     #[ts(type = "number")]
     pub after_kill_secs: u64,
@@ -154,6 +159,9 @@ const APPISH_PARENT: &str =
 pub fn default_allow() -> Vec<AllowRule> {
     vec![
         allow("tsgo", "^tsgo$", None, Some(r"(^|\s)--(lsp|watch)(\s|=|$)"), None),
+        // Типовой линтер oxlint (`oxlint --type-aware` → `tsgolint headless`): прогон, растёт до
+        // 4+ ГБ (24.11.2026 — главный пожиратель красного эпизода, а сторож его не видел).
+        allow("tsgolint", "^tsgolint$", None, Some(r"(^|\s)--(lsp|watch)(\s|=|$)"), Some(APPISH_PARENT)),
         allow("tsc", r"^(tsc|node\d*|bun)$", Some(r"(^|/)tsc(\.js)?(\s|$)"), Some(r"(^|\s)(--watch|-w)(\s|$)"), None),
         allow("vitest", r"^(node\d*|bun)$", Some(r"(^|/)vitest(\.m?js)?(\s|$)"), Some(r"(^|\s)--watch(\s|$)"), None),
         allow("jest", r"^(node\d*|bun)$", Some(r"(^|/)jest(\.m?js)?(\s|$)"), Some(r"(^|\s)--watch(All)?(\s|$)"), None),
@@ -224,6 +232,7 @@ impl Default for GuardConfig {
             notify: true,
             notify_dry_run: true,
             sustain_secs: 12,
+            red_gap_secs: 30,
             after_kill_secs: 20,
             term_grace_secs: 5,
             red: RedConfig::default(),
@@ -295,31 +304,49 @@ pub fn judge_zone(m: &SystemMemory, red: &RedConfig) -> (Zone, String) {
     (Zone::Green, "норма".into())
 }
 
-/// Красная зона должна держаться `sustain` подряд; любой не-красный опрос сбрасывает отсчёт.
+/// Опрос, отстоящий от прошлого дальше этого, в красное не засчитывается (сон, зависание).
+const MAX_STEP_MS: u64 = 10_000;
+
+/// Красное копится по опросам; провал в не-красное короче `gap` набранное не сбрасывает,
+/// провал длиннее — сбрасывает. Действовать можно только на красном опросе.
+///
+/// Зачем: 24.11.2026 давление ядра 3,5 мин мигало «красное 2–8 с ↔ жёлтое 2–20 с», а старое
+/// «подряд» обнулялось на каждом жёлтом опросе — сторож срабатывал с опозданием или никогда.
 #[derive(Debug, Clone, Default)]
 pub struct Hysteresis {
-    since_ms: Option<u64>,
+    red_ms: u64,
+    last_ms: Option<u64>,
+    calm_since_ms: Option<u64>,
 }
 
 impl Hysteresis {
-    /// `true` — пора действовать.
-    pub fn feed(&mut self, zone: Zone, now_ms: u64, sustain_ms: u64) -> bool {
+    /// `true` — пора действовать. Время от прошлого опроса до красного опроса — красное.
+    pub fn feed(&mut self, zone: Zone, now_ms: u64, sustain_ms: u64, gap_ms: u64) -> bool {
+        let prev = self.last_ms.replace(now_ms);
         if zone != Zone::Red {
-            self.since_ms = None;
+            let calm = *self.calm_since_ms.get_or_insert(now_ms);
+            if now_ms.saturating_sub(calm) >= gap_ms {
+                self.red_ms = 0;
+            }
             return false;
         }
-        let since = *self.since_ms.get_or_insert(now_ms);
-        now_ms.saturating_sub(since) >= sustain_ms
+        self.calm_since_ms = None;
+        if let Some(dt) = prev.map(|t| now_ms.saturating_sub(t))
+            && dt <= MAX_STEP_MS
+        {
+            self.red_ms += dt;
+        }
+        self.red_ms >= sustain_ms
     }
 
     /// После снятия — отсчёт заново.
     pub fn reset(&mut self) {
-        self.since_ms = None;
+        *self = Self::default();
     }
 
-    /// Сколько уже красное.
-    pub fn red_for_ms(&self, now_ms: u64) -> u64 {
-        self.since_ms.map_or(0, |s| now_ms.saturating_sub(s))
+    /// Сколько красного набралось.
+    pub fn red_for_ms(&self) -> u64 {
+        self.red_ms
     }
 }
 
@@ -536,7 +563,7 @@ fn rank_victims_with(
         let kind = match allow_match(p, &cmd, parent_exe.as_deref(), &rules.allow) {
             Ok(kind) => kind,
             Err(why) => {
-                if matches!(exe_base(p), "tsgo" | "tsc" | "bun") || exe_base(p).starts_with("node") {
+                if matches!(exe_base(p), "tsgo" | "tsgolint" | "tsc" | "bun") || exe_base(p).starts_with("node") {
                     note(why);
                 }
                 continue;
@@ -646,14 +673,16 @@ impl Guard {
         let (zone, zone_why) = judge_zone(&snap.system, &cfg.red);
         let zone_changed = self.zone != Some(zone);
         self.zone = Some(zone);
-        if zone != Zone::Red {
-            self.noted.clear();
-        }
         let obs = |decision| Observation { zone, zone_why: zone_why.clone(), zone_changed, decision };
         if now_ms < self.pause_until_ms {
             return obs(Decision::Wait);
         }
-        if !self.hyst.feed(zone, now_ms, cfg.sustain_secs * 1000) {
+        let due = self.hyst.feed(zone, now_ms, cfg.sustain_secs * 1000, cfg.red_gap_secs * 1000);
+        if zone != Zone::Red && self.hyst.red_for_ms() == 0 {
+            // Красный эпизод кончился (провал дольше `red_gap_secs`): «некого» и «предел» — сказать заново.
+            self.noted.clear();
+        }
+        if !due {
             return obs(Decision::Wait);
         }
         if let Some(why) = self.limiter.blocked(&cfg.limits, now_ms) {
@@ -664,7 +693,7 @@ impl Guard {
         let (candidates, rejected) = rank_victims_with(snap, rules, &exclude, policy);
         match candidates.into_iter().next() {
             Some(victim) => {
-                obs(Decision::Act { victim, why: zone_why.clone(), red_for_secs: self.hyst.red_for_ms(now_ms) / 1000 })
+                obs(Decision::Act { victim, why: zone_why.clone(), red_for_secs: self.hyst.red_for_ms() / 1000 })
             }
             None if self.noted.insert("none") => {
                 obs(Decision::NoVictim { why: zone_why.clone(), rejected: rejected.into_iter().take(8).collect() })
@@ -690,9 +719,19 @@ impl Guard {
         self.zone
     }
 
-    /// Сколько уже красное.
-    pub fn red_for_secs(&self, now_ms: u64) -> u64 {
-        self.hyst.red_for_ms(now_ms) / 1000
+    /// Сколько красного набралось.
+    pub fn red_for_secs(&self) -> u64 {
+        self.hyst.red_for_ms() / 1000
+    }
+
+    /// Сколько ещё пауза после снятия, с (0 — паузы нет).
+    pub fn pause_secs(&self, now_ms: u64) -> u64 {
+        self.pause_until_ms.saturating_sub(now_ms).div_ceil(1000)
+    }
+
+    /// Упёрся ли в предел снятий — и в какой.
+    pub fn limited(&self, cfg: &GuardConfig, now_ms: u64) -> Option<String> {
+        self.limiter.blocked(&cfg.limits, now_ms)
     }
 }
 
